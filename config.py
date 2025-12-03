@@ -41,12 +41,24 @@ PHYSICS_THRESHOLDS = {
 }
 
 # ==========================================
+# SENSOR FALLBACKS (Primary -> Backup)
+# ==========================================
+# If the Primary sensor is missing (NaN) or unavailable, 
+# the system will try to fill gaps using the Backup sensor.
+SENSOR_FALLBACKS = {
+    'OutdoorTemp': 'OutdoorTemp_OWM',
+    'Outdoor_Humidity': 'Outdoor_Humidity_OWM',
+    'Wind_Speed': 'Wind_Speed_OWM'
+    # Note: Solar_Rad is not backed up by UV_Index due to unit mismatch (W/m2 vs Index)
+}
+
+# ==========================================
 # SENSOR GROUPS (Visual Display Order)
 # ==========================================
 SENSOR_GROUPS = {
     "⚡ Power & Energy": ['Power', 'Indoor_Power', 'Heat'],
     "💧 Hydraulics": ['DeltaT', 'FlowRate', 'FlowTemp', 'ReturnTemp', 'Pump_Primary', 'Pump_Secondary', 'ValveMode'],
-    "🌤️ Environment": ['OutdoorTemp', 'Solar_Rad', 'Wind_Speed', 'Outdoor_Humidity'],
+    "🌤️ Environment": ['OutdoorTemp', 'Solar_Rad', 'Wind_Speed', 'Outdoor_Humidity', 'UV_Index_OWM'],
     
     # Updated 'Heat_Pump_Active' here:
     "⚙️ System State": ['Heat_Pump_Active', 'DHW_Mode', 'Immersion_Mode', 'Quiet_Mode', 'DHW_Temp'],
@@ -79,6 +91,7 @@ SENSOR_EXPECTATION_MODE = {
     'Outdoor_Humidity': 'system',
     'Solar_Rad': 'system',
     'Wind_Speed': 'system',
+    'UV_Index_OWM': 'system', # New OWM Sensor
 
     # --- ROOM TEMPERATURES ---
     'Room_Hallway': 'system',
@@ -132,6 +145,13 @@ SENSOR_ROLES = {
     'sensor.caoimhe_s_room_temp_humidity_sensor_temperature': 'room_temp',
     'sensor.ecowitt_weather_indoor_temperature': 'room_temp',
     'sensor.heat_pump_temp_humidity_sensor_temperature': 'room_temp',
+    
+    # Backup OpenWeather Sensors
+    'sensor.openweathermap_temperature': 'core_periodic',
+    'sensor.openweathermap_humidity': 'core_periodic',
+    'sensor.openweathermap_wind_speed': 'core_periodic',
+    'sensor.openweathermap_uv_index': 'core_periodic',
+
     'binary_sensor.underfloor_pump': 'binary_state',
     'binary_sensor.downstairs_radiator_pump': 'binary_state',
     'binary_sensor.upstairs_radiator_pump': 'binary_state',
@@ -158,7 +178,6 @@ ENTITY_MAP = {
     'sensor.heat_pump_flow_rate': 'FlowRate',
     'sensor.heat_pump_cop': 'COP_Raw',
     
-    # UPDATED MAPPING: Maps raw sensor to your new 'Heat_Pump_Active' name
     'binary_sensor.heat_pump_in_operation': 'Heat_Pump_Active', 
     
     'sensor.heat_pump_flow_temperature': 'FlowTemp',
@@ -184,6 +203,12 @@ ENTITY_MAP = {
     'binary_sensor.secondary_pump': 'Pump_Secondary',
     'sensor.heat_pump_defrost_status': 'Defrost',
     'sensor.heat_pump_3way_valve_position_value': 'ValveMode',
+
+    # --- OPENWEATHER BACKUPS ---
+    'sensor.openweathermap_temperature': 'OutdoorTemp_OWM',
+    'sensor.openweathermap_humidity': 'Outdoor_Humidity_OWM',
+    'sensor.openweathermap_wind_speed': 'Wind_Speed_OWM',
+    'sensor.openweathermap_uv_index': 'UV_Index_OWM',
 }
 
 ZONE_TO_ROOM_MAP = {
@@ -191,54 +216,3 @@ ZONE_TO_ROOM_MAP = {
     'Zone_DS':  ['Room_Living', 'Room_Playroom', 'Room_Hallway'],
     'Zone_US':  ['Room_MainBed', 'Room_Oisin', 'Room_Caoimhe']
 }
-
-TARIFF_STRUCTURE = [
-    {
-        "valid_from": "2023-01-01",
-        "name": "Standard Dual Rate",
-        "rules": [
-            {"name": "Night", "start": "02:00", "end": "06:00", "rate": 0.08},
-            {"name": "Day",    "start": "06:00", "end": "02:00", "rate": 0.33},
-        ]
-    },
-    {
-        "valid_from": "2026-01-19",
-        "name": "Multi-Band Smart Tariff",
-        "rules": [
-            {"name": "Night",       "start": "00:00", "end": "02:00", "rate": 0.20},
-            {"name": "Night (EV)",  "start": "02:00", "end": "05:00", "rate": 0.075},
-            {"name": "Night",       "start": "05:00", "end": "08:00", "rate": 0.20},
-            {"name": "Day",         "start": "08:00", "end": "17:00", "rate": 0.33},
-            {"name": "Peak",        "start": "17:00", "end": "19:00", "rate": 0.45},
-            {"name": "Day",         "start": "19:00", "end": "23:00", "rate": 0.33},
-            {"name": "Night",       "start": "23:00", "end": "00:00", "rate": 0.20} 
-        ]
-    }
-]
-
-CONFIG_HISTORY = [
-    {"start": "2023-01-01", "config_tag": "baseline_v1", "change_note": "Initial commissioning."},
-    {"start": "2025-11-28", "config_tag": "Pump & Hydraulic Fix", "change_note": "Primary/Secondary Pumps to Constant Speed II."},
-    {"start": "2025-11-30", "config_tag": "Data Fix & DHW Tuning", "change_note": "HA Helpers updated. DHW Target 50C."},
-    {"start": "2025-12-01", "config_tag": "Sequential Schedule", "change_note": "DHW 02:00-03:00, Heating 03:00-06:00."}
-]
-
-AI_SYSTEM_CONTEXT = """
-SYSTEM CONTEXT FOR AI ANALYSIS (HEAT PUMP PHYSICS & SETTINGS):
-- Heat Pump Model: Samsung EHS Mono Gen 6 (AE080RXYDEG/EU).
-- Controller: Joule Kodiak Control Board (SmartPlumb System).
-- Control Logic: "Single Master Curve". The system generates water based on the Radiator Requirement.
-- Efficiency Goal: Weather Compensation (Low Flow Temp at mild Outdoor Temp).
-- Anomaly Detection: System Limit (43°C), Short Cycling, Cost Inefficiency, DHW Drag.
-- Property: 175sqm Detached A1 Rated House. High Thermal Mass.
-- Operational Strategy: "Super-Heating" the fabric during Night Rate (02:00-06:00).
-- Flow Limiting Context: "Virtual_FTlim" = minutes where Actual Flow runs >2 degC below Target during heating. High totals point to flow restriction (air/pump/valves), aggressive curve, or mixing.
-
-KNOWN SYSTEM BEHAVIOUR (HEATING DURING DHW):
-- CONTROL LIMITATION: Heating zone pumps (UFH and Rads) can run during DHW production.
-- PHYSICAL CONSEQUENCE:
-  1. Hydraulic Mixing.
-  2. Elevated Return Temperatures.
-  3. Efficiency Penalty (< 2.0 COP).
-- DETECTION RULE: 'heating_during_dhw_detected' = TRUE if any heating zone pump is ON for >15% of DHW duration.
-"""
