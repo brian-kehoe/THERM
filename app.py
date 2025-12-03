@@ -7,9 +7,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timezone
 import os
-import warnings
 import json
-import streamlit as st
+import warnings
 
 # Suppress noisy RuntimeWarning for sparse data averages
 warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
@@ -24,10 +23,8 @@ import data_loader
 import processing
 import baselines
 
-#st.write("Step 1: App Started")  # <--- Debug Line 1
-
 # Page Setup
-st.set_page_config(page_title="Heat Pump Analytics", layout="wide", page_icon="🔥")
+st.set_page_config(page_title="T.H.E.R.M.", layout="wide", page_icon="🔥")
 pd.set_option('future.no_silent_downcasting', True)
 pd.options.display.float_format = lambda x: f"{x:.2f}"
 
@@ -75,7 +72,7 @@ uploaded_files = st.sidebar.file_uploader("Upload CSV(s)", accept_multiple_files
 
 if uploaded_files:
     cached = process_uploaded_files_once(uploaded_files)
-    #st.write("Step 2: Processing Complete")  # <--- Debug Line 2
+    
     if cached and cached.get("df") is not None:
         df = cached["df"]
         runs_list = cached["runs"]
@@ -99,12 +96,45 @@ if uploaded_files:
                     scop = safe_div(daily_df['Total_Heat_kWh'].sum(), daily_df['Total_Electricity_kWh'].sum())
                     k4.metric("Period SCOP", f"{scop:.2f}")
                     
+                    # --- CHART 1: DAILY ENERGY (Stacked) ---
                     fig = go.Figure()
-                    fig.add_trace(go.Bar(x=daily_df.index, y=daily_df['Heat_Heating_kWh'], name='Heat', marker_color='#ffa600'))
-                    fig.add_trace(go.Bar(x=daily_df.index, y=daily_df['Electricity_Heating_kWh'], name='Elec', marker_color='#003f5c'))
-                    fig.update_layout(title="Daily Energy", barmode='group')
-                    st.plotly_chart(fig, width="stretch")
+                    
+                    # Left Stack: Heat Output
+                    fig.add_trace(go.Bar(
+                        x=daily_df.index, y=daily_df['Heat_Heating_kWh'], 
+                        name='Space Heat', marker_color='#ffa600', offsetgroup=0, legendgroup='Output'
+                    ))
+                    fig.add_trace(go.Bar(
+                        x=daily_df.index, y=daily_df['Heat_DHW_kWh'], 
+                        name='DHW Heat', marker_color='#ffd580', offsetgroup=0, 
+                        base=daily_df['Heat_Heating_kWh'], legendgroup='Output'
+                    ))
 
+                    # Right Stack: Energy Input
+                    fig.add_trace(go.Bar(
+                        x=daily_df.index, y=daily_df['Electricity_Heating_kWh'], 
+                        name='Space Elec', marker_color='#003f5c', offsetgroup=1, legendgroup='Input'
+                    ))
+                    fig.add_trace(go.Bar(
+                        x=daily_df.index, y=daily_df['Electricity_DHW_kWh'], 
+                        name='DHW Elec', marker_color='#58508d', offsetgroup=1, 
+                        base=daily_df['Electricity_Heating_kWh'], legendgroup='Input'
+                    ))
+                    fig.add_trace(go.Bar(
+                        x=daily_df.index, y=daily_df['Immersion_kWh'], 
+                        name='Immersion', marker_color='#bc5090', offsetgroup=1, 
+                        base=daily_df['Electricity_Heating_kWh'] + daily_df['Electricity_DHW_kWh'], legendgroup='Input'
+                    ))
+                    
+                    fig.update_layout(
+                        title="Daily Energy Balance (Stacked by Component)",
+                        yaxis_title="Energy (kWh)",
+                        barmode='group',
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    st.plotly_chart(fig, width="stretch", key="daily_energy_chart")
+
+                    # --- CHART 2: ENVIRONMENTAL ---
                     c1, c2 = st.columns(2)
                     with c1:
                         fig_env = make_subplots(specs=[[{"secondary_y": True}]])
@@ -113,51 +143,91 @@ if uploaded_files:
                         if 'Humidity_Avg' in daily_df:
                             fig_env.add_trace(go.Scatter(x=daily_df.index, y=daily_df['Humidity_Avg'], name="Humidity", line=dict(color='blue', dash='dot')), secondary_y=True)
                         fig_env.update_layout(title="Wind & Humidity", height=300)
-                        st.plotly_chart(fig_env, width="stretch")
+                        st.plotly_chart(fig_env, width="stretch", key="env_chart")
+                        
                     with c2:
                         fig_sol = make_subplots(specs=[[{"secondary_y": True}]])
                         if 'Solar_Avg' in daily_df:
                             fig_sol.add_trace(go.Bar(x=daily_df.index, y=daily_df['Solar_Avg'], name="Solar", marker_color='orange'), secondary_y=False)
                         fig_sol.add_trace(go.Scatter(x=daily_df.index, y=daily_df['Global_SCOP'], name="SCOP", line=dict(color='green')), secondary_y=True)
                         fig_sol.update_layout(title="Solar Gain vs Efficiency", height=300)
-                        st.plotly_chart(fig_sol, width="stretch")
+                        st.plotly_chart(fig_sol, width="stretch", key="solar_chart")
                     
-                    st.subheader("Optimization: Weather Compensation Curve")
-                    
-                    # Sample data for performance
-                    scatter_data = df[(df['is_active']) & (~df['is_DHW'])].sample(frac=0.1) 
-                    
-                    fig_wc = px.scatter(
-                        scatter_data, 
-                        x='OutdoorTemp', 
-                        y='FlowTemp', 
-                        color='COP_Graph',
-                        color_continuous_scale='RdYlGn',
-                        title="Flow Temp vs Outdoor Temp",
-                        opacity=0.6,
-                        labels={'OutdoorTemp': 'Outdoor Temp (°C)', 'FlowTemp': 'Flow Temp (°C)'}
-                    )
+                    st.divider()
 
-                    # Improved "Inefficient Zone" Visual
-                    fig_wc.add_shape(
-                        type="rect",
-                        x0=10, y0=43, x1=20, y1=60,
-                        line=dict(width=0),       # No border line
-                        fillcolor="Red",
-                        opacity=0.08,             # Very subtle background tint
-                        layer="below"             # Sit behind the data points
-                    )
-
-                    # Clean Label inside the zone
-                    fig_wc.add_annotation(
-                        x=15, y=58,               # Centered near the top of the zone
-                        text="Inefficient Zone (>43°C)",
-                        showarrow=False,
-                        font=dict(color="darkred", size=10),
-                        bgcolor="rgba(255, 255, 255, 0.5)" # Semi-transparent backing for readability
-                    )
+                    # --- CHART 3: HEATING CURVE (Space Heating Only) ---
+                    st.subheader("1. Space Heating: Weather Compensation Curve")
+                    st.caption("Target: Diagonal line downwards (One dot representing the average of each run).")
                     
-                    st.plotly_chart(fig_wc, width="stretch")
+                    # Filter for Space Heating runs (Compressor ON, Not DHW)
+                    heat_data = df[(df['is_heating']) & (~df['is_DHW']) & (df['FlowTemp'] > 25)]
+                    
+                    if not heat_data.empty and 'run_id' in heat_data.columns:
+                        # AGGREGATE: Group by run_id to get averages per run
+                        scatter_heat = heat_data.groupby('run_id')[['OutdoorTemp', 'FlowTemp', 'COP_Graph']].mean().reset_index()
+                        
+                        fig_wc = px.scatter(
+                            scatter_heat, 
+                            x='OutdoorTemp', 
+                            y='FlowTemp', 
+                            color='COP_Graph',
+                            color_continuous_scale='RdYlGn',
+                            title="Flow Temp vs Outdoor Temp (Run Averages)",
+                            opacity=0.9,
+                            labels={'OutdoorTemp': 'Avg Outdoor Temp (°C)', 'FlowTemp': 'Avg Flow Temp (°C)', 'COP_Graph': 'COP'},
+                            hover_data={
+                                'OutdoorTemp': ':.1f',  # 1 decimal
+                                'FlowTemp': ':.1f',     # 1 decimal
+                                'COP_Graph': ':.2f',    # 2 decimals
+                                'run_id': True          # Keep run_id visible
+                            }
+                        )
+                        # Add "Inefficient Zone" Box
+                        fig_wc.add_shape(
+                            type="rect", x0=10, y0=43, x1=20, y1=60,
+                            line=dict(width=0), fillcolor="Red", opacity=0.08, layer="below"
+                        )
+                        fig_wc.add_annotation(
+                            x=15, y=58, text="Inefficient Zone (>43°C)",
+                            showarrow=False, font=dict(color="darkred", size=10),
+                            bgcolor="rgba(255, 255, 255, 0.5)"
+                        )
+                        st.plotly_chart(fig_wc, width="stretch", key="wc_heating_chart")
+                    else:
+                        st.info("No Space Heating runs detected in this dataset.")
+
+                    # --- CHART 4: DHW CURVE (Hot Water Only) ---
+                    st.subheader("2. Hot Water: Temperature Consistency")
+                    st.caption("Target: Flat horizontal cluster (One dot representing the average of each run).")
+
+                    # Filter for valid DHW heating moments (Compressor ON, Hot Water Mode, Warm pipes)
+                    dhw_data = df[(df['is_heating']) & (df['is_DHW']) & (df['FlowTemp'] > 25)]
+                    
+                    if not dhw_data.empty and 'run_id' in dhw_data.columns:
+                        # AGGREGATE: Group by run_id to get averages per run
+                        scatter_dhw = dhw_data.groupby('run_id')[['OutdoorTemp', 'FlowTemp', 'COP_Graph']].mean().reset_index()
+                        
+                        fig_dhw = px.scatter(
+                            scatter_dhw, 
+                            x='OutdoorTemp', 
+                            y='FlowTemp', 
+                            color='COP_Graph',
+                            color_continuous_scale='RdYlGn',
+                            opacity=0.9, 
+                            labels={'OutdoorTemp': 'Avg Outdoor Temp (°C)', 'FlowTemp': 'Avg Flow Temp (°C)', 'COP_Graph': 'COP'},
+                            hover_data={
+                                'OutdoorTemp': ':.1f',  # 1 decimal
+                                'FlowTemp': ':.1f',     # 1 decimal
+                                'COP_Graph': ':.2f',    # 2 decimals
+                                'run_id': True
+                            }
+                        )
+                        # Add Reference Line at 50C (Typical Target)
+                        fig_dhw.add_hline(y=50.0, line_dash="dot", line_color="grey", annotation_text="Typical Target (50°C)")
+                        
+                        st.plotly_chart(fig_dhw, width="stretch", key="wc_dhw_chart")
+                    else:
+                        st.info("No Hot Water (DHW) runs detected in this dataset.")
 
                 with tab_ai:
                     # 1. Prepare Data
@@ -187,7 +257,7 @@ if uploaded_files:
                         "daily_metrics": json_ready.to_dict(orient='records')
                     }
                     
-                    # 2. Add Download Button (FIXED)
+                    # 2. Add Download Button
                     st.download_button(
                         label="📥 Download JSON for AI Analysis",
                         data=json.dumps(ai_payload, indent=2),
@@ -277,7 +347,7 @@ if uploaded_files:
                         fig.add_trace(go.Scatter(x=run_data.index, y=run_data['Indoor_Power'], name="Indoor", line=dict(color='purple', width=1, dash='dot')), secondary_y=False)
                     fig.add_trace(go.Scatter(x=run_data.index, y=run_data['COP_Graph'], name="COP", line=dict(color='blue', dash='dot', width=1)), secondary_y=True)
                     fig.update_layout(**tight_layout, title="Power & Efficiency", hovermode="x unified")
-                    st.plotly_chart(fig, width="stretch")
+                    st.plotly_chart(fig, width="stretch", key="run_power_chart")
                 
                 with tab2:
                     if selected_run['run_type'] == "DHW":
@@ -330,7 +400,7 @@ if uploaded_files:
                         fig2.update_yaxes(title_text="Temp (°C)", row=4, col=1)
 
                     fig2.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=650, hovermode="x unified")
-                    st.plotly_chart(fig2, width="stretch")
+                    st.plotly_chart(fig2, width="stretch", key="run_hydro_chart")
                 
                 with tab3:
                     if selected_run['run_type'] == "Heating":
@@ -375,7 +445,7 @@ if uploaded_files:
                             yaxis2=dict(title="Outdoor", overlaying="y", side="right", showgrid=False),
                             legend=dict(orientation="h", yanchor="bottom", y=-0.3, x=0)
                         )
-                        st.plotly_chart(fig3, width="stretch")
+                        st.plotly_chart(fig3, width="stretch", key="run_rooms_chart")
                     else:
                         st.info("Room temperature analysis is skipped for DHW runs.")
 
@@ -489,19 +559,11 @@ if uploaded_files:
                 
                 def expected_window_series(sensor_name, system_on_minutes):
                     # 1. Try to get a smart target from the learned Baseline
-                    # (This aligns the score with what is "normal" for this specific sensor)
                     baseline_data = st.session_state.get("heartbeat_baseline", {}).get(sensor_name)
                     
                     if baseline_data and baseline_data.get('expected_minutes'):
-                        # Calculate expected ratio (e.g. 0.05 updates per minute)
-                        # We use 1440.0 as the standard day reference for the baseline
                         baseline_ratio = baseline_data['expected_minutes'] / 1440.0
-                        
-                        # Apply that ratio to the actual active time today
-                        # If system was on for 1000 mins, and sensor usually reports 10% of the time, expect 100 updates.
                         base = system_on_minutes * baseline_ratio
-                        
-                        # Ensure we expect at least 1 update if the system was on
                         return base.replace(0, np.nan).apply(lambda x: max(1.0, x) if x > 0 else np.nan)
 
                     # 2. Fallback: Use Manual Rules (if no baseline exists yet)
@@ -512,7 +574,7 @@ if uploaded_files:
                     elif mode == 'dhw_active': 
                         base = daily_df.get('Total_DHW_Mins', system_on_minutes)
                     elif mode == 'system_slow':
-                        # Manual fallback for slow sensors
+                        # Legacy fallback if config wasn't reverted
                         base = (system_on_minutes / 60.0).apply(np.ceil)
                     else: 
                         # Default 'system' = expect 1 update per minute
@@ -595,7 +657,10 @@ if uploaded_files:
                         col_name = f"DQ_{sensor}_Count" if f"DQ_{sensor}_Count" in daily_df.columns else f"{sensor}_count"
                         if col_name in daily_df.columns:
                             # Pass raw count for events/defrost, percentage for others
-                            if 'defrost' in sensor.lower():
+                            # Check config mode OR name matching
+                            mode = SENSOR_EXPECTATION_MODE.get(sensor, 'system')
+                            
+                            if mode == 'event_only' or 'defrost' in sensor.lower():
                                 cat_df[sensor] = daily_df[col_name].fillna(0).astype(int)
                             else:
                                 expected = expected_window_series(sensor, system_on_minutes)
@@ -608,14 +673,22 @@ if uploaded_files:
                     styler = cat_disp.style.format("{:.0f}", na_rep="N/A")
                     
                     # Gradient for standard sensors
-                    normal_cols = [c for c in valid_cols_for_display if 'defrost' not in c.lower()]
+                    normal_cols = [
+                        c for c in valid_cols_for_display 
+                        if SENSOR_EXPECTATION_MODE.get(c, 'system') != 'event_only'
+                    ]
+                    
+                    # Grey for events
+                    event_cols = [
+                        c for c in valid_cols_for_display 
+                        if SENSOR_EXPECTATION_MODE.get(c, 'system') == 'event_only'
+                    ]
+
                     if normal_cols:
                         styler = styler.background_gradient(subset=normal_cols, cmap='RdYlGn', vmin=0, vmax=100)
                     
-                    # Grey for events
-                    defrost_cols = [c for c in valid_cols_for_display if 'defrost' in c.lower()]
-                    if defrost_cols:
-                        styler = styler.map(lambda x: "background-color: #e0e0e0; color: #555555", subset=defrost_cols)
+                    if event_cols:
+                        styler = styler.map(lambda x: "background-color: #e0e0e0; color: #555555", subset=event_cols)
 
                     st.dataframe(styler, width="stretch")
 
@@ -625,7 +698,6 @@ if uploaded_files:
                     
                     count_cols = [c for c in daily_df.columns if c.endswith('_count') or c.endswith('_Count')]
                     if count_cols:
-                        # 1. Calculate raw percentages
                         # 1. Calculate raw percentages
                         flat_data = {}
                         for c in count_cols:
