@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from config import (THRESHOLDS, ENTITY_MAP, NIGHT_HOURS, MIN_HEAT_FREQ, MIN_POWER_W, 
                     TARIFF_STRUCTURE, ZONE_TO_ROOM_MAP, CONFIG_HISTORY, 
-                    SPECIFIC_HEAT_CAPACITY, PHYSICS_THRESHOLDS)
+                    SPECIFIC_HEAT_CAPACITY, PHYSICS_THRESHOLDS, SENSOR_FALLBACKS)
 from utils import safe_div, availability_pct
 
 def calculate_physics_metrics(df):
@@ -50,6 +50,22 @@ def calculate_physics_metrics(df):
     
     return d
 
+def apply_sensor_fallbacks(df):
+    """
+    Fills gaps in Primary sensors using Backup sensors defined in SENSOR_FALLBACKS.
+    """
+    d = df.copy()
+    for prim, back in SENSOR_FALLBACKS.items():
+        # Only proceed if the backup sensor actually exists in this dataset
+        if back in d.columns:
+            # If primary column is missing entirely, create it from backup
+            if prim not in d.columns:
+                d[prim] = d[back]
+            else:
+                # If primary exists, fill any NaNs with backup data
+                d[prim] = d[prim].fillna(d[back])
+    return d
+
 def detect_hydraulic_interference(row_or_df):
     is_dhw = row_or_df['is_DHW']
     pump_cols = [c for c in ['Zone_UFH', 'Zone_DS', 'Zone_US'] if c in row_or_df]
@@ -77,8 +93,12 @@ def detect_hydraulic_interference(row_or_df):
 def apply_gatekeepers(df):
     d = df.copy()
     
-    # 1. Ensure all expected columns exist (Gatekeeper 1)
-    # UPDATED: Replaced HP_Binary_Status with Heat_Pump_Active
+    # 1. Apply Sensor Fallbacks (OpenWeather Backup)
+    # We do this FIRST so that if a primary sensor is missing, it gets filled 
+    # before we check for "expected" columns.
+    d = apply_sensor_fallbacks(d)
+
+    # 2. Ensure all expected columns exist (Gatekeeper 1)
     expected = ['Freq', 'Power', 'Heat', 'DeltaT', 'FlowRate', 'FlowTemp', 'ReturnTemp',
                 'OutdoorTemp', 'DHW_Temp', 'Indoor_Power', 'Immersion_Mode', 'Heat_Pump_Active',
                 'Defrost', 'Zone_UFH', 'Zone_DS', 'Zone_US', 'Pump_Primary', 'Pump_Secondary']
@@ -95,7 +115,6 @@ def apply_gatekeepers(df):
     if 'ValveMode' not in d.columns: d['ValveMode'] = 'Heating'
     if 'DHW_Mode' not in d.columns: d['DHW_Mode'] = 'Standard'
 
-    # UPDATED: Logic now uses Heat_Pump_Active
     d['Heat_Pump_Active_Clean'] = d['Heat_Pump_Active'].fillna(0).astype(int)
     
     if d['Heat_Pump_Active_Clean'].sum() == 0 and 'Freq' in d.columns:
@@ -111,7 +130,6 @@ def apply_gatekeepers(df):
     d['run_start'] = np.where(false_start_mask, 0, d['run_start_raw'])
     d['Heat_Pump_Active'] = d['Heat_Pump_Active_Clean']
 
-    # UPDATED: is_active depends on Heat_Pump_Active
     d['is_active'] = (d['Heat_Pump_Active'] == 1) | (abs(d['Power']) > MIN_POWER_W)
     d['is_active'] = d['is_active'].astype(int)
     d['is_heating'] = (d['Freq'] > MIN_HEAT_FREQ) | (abs(d['Power']) > MIN_POWER_W)
