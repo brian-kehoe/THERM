@@ -182,15 +182,27 @@ if uploaded_files:
                                 'run_id': True          # Keep run_id visible
                             }
                         )
-                        # Add "Inefficient Zone" Box
+                        # Modified "Inefficient Zone" Visual (Subtle Outline)
                         fig_wc.add_shape(
-                            type="rect", x0=10, y0=43, x1=20, y1=60,
-                            line=dict(width=0), fillcolor="Red", opacity=0.08, layer="below"
+                            type="rect", 
+                            x0=10, y0=43, x1=20, y1=60,
+                            line=dict(
+                                color="red", 
+                                width=1, 
+                                dash="dot"  # Dashed line is less aggressive
+                            ),
+                            fillcolor="rgba(0,0,0,0)", # Transparent fill
+                            opacity=0.3,               # Faint line
+                            layer="below"
                         )
+                        
+                        # Annotation remains the same (but maybe smaller font)
                         fig_wc.add_annotation(
-                            x=15, y=58, text="Inefficient Zone (>43°C)",
-                            showarrow=False, font=dict(color="darkred", size=10),
-                            bgcolor="rgba(255, 255, 255, 0.5)"
+                            x=15, y=58, 
+                            text="Inefficient Zone (>43°C)",
+                            showarrow=False, 
+                            font=dict(color="red", size=9), # Smaller, simpler text
+                            opacity=0.6
                         )
                         st.plotly_chart(fig_wc, width="stretch", key="wc_heating_chart")
                     else:
@@ -350,21 +362,41 @@ if uploaded_files:
                     st.plotly_chart(fig, width="stretch", key="run_power_chart")
                 
                 with tab2:
+                    # 1. Ghost Pumping Metrics (DHW Only)
                     if selected_run['run_type'] == "DHW":
-                        k1, k2 = st.columns(2)
                         is_ghost_sensor = selected_run.get('heating_during_dhw_detected', False)
                         is_ghost_power = selected_run.get('ghost_pumping_power_detected', False)
-                        k1.metric("Ghost (Sensors)", "Detected" if is_ghost_sensor else "Clear", delta="⚠️" if is_ghost_sensor else None, delta_color="inverse")
-                        k2.metric("Ghost (Power Proxy)", "Detected" if is_ghost_power else "Clear", help=f"Threshold: {THRESHOLDS['ghost_power_threshold']}W", delta="⚠️" if is_ghost_power else None, delta_color="inverse")
+                        
+                        # SUBTLE FIX: Simple text line instead of big metric blocks
+                        state_sensor = "⚠️ **Detected**" if is_ghost_sensor else "✅ Clear"
+                        state_power = "⚠️ **Detected**" if is_ghost_power else "✅ Clear"
+                        
+                        st.markdown(f"**Ghost Pumping Check:** &nbsp; Sensors: {state_sensor} &nbsp; | &nbsp; Power Proxy: {state_power}")
+                        
+                        # Optional: Add a tiny explainer only if an error is found
+                        if is_ghost_sensor or is_ghost_power:
+                            st.caption("⚠️ *Warning: Heating zones appear to be active during Hot Water generation. This reduces efficiency.*")
+                        
+                        st.divider()
 
-                    # --- RESTORED: 4-Row Forensic Subplot ---
+                    # 2. Dynamic Subplot Configuration
+                    # Only show the 4th row (Tank vs Return) if this is a Hot Water run
+                    is_dhw = selected_run['run_type'] == "DHW"
+                    
+                    num_rows = 4 if is_dhw else 3
+                    row_titles = ["Delta T", "Flow Rate", "Active Zones"]
+                    if is_dhw:
+                        row_titles.append("Hot Water / Return Temps")
+                    
+                    chart_height = 650 if is_dhw else 500
+
                     fig2 = make_subplots(
-                        rows=4, 
+                        rows=num_rows, 
                         cols=1, 
                         shared_xaxes=True,
                         vertical_spacing=0.08,
-                        subplot_titles=("Delta T", "Flow Rate", "Active Zones", "Hot Water / Return Temps"),
-                        specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}]]
+                        subplot_titles=row_titles,
+                        specs=[[{"secondary_y": False}]] * num_rows
                     )
                     
                     # Row 1: Delta T
@@ -385,21 +417,22 @@ if uploaded_files:
                             fig2.add_trace(go.Scatter(x=run_data.index, y=y_vals, name=z_name, mode='lines', line=dict(width=15), connectgaps=False), row=3, col=1)
                     fig2.update_yaxes(tickvals=[0.4, 1.4, 2.4, 3.4], ticktext=["Hot Water", "Kitchen", "Downstairs", "Upstairs"], range=[0, 4], row=3, col=1)
                     
-                    # Row 4: DHW / Return Temps (Restored)
-                    dhw_avail = 'DHW_Temp' in run_data.columns and run_data['DHW_Temp'].notna().any()
-                    ret_avail = 'ReturnTemp' in run_data.columns and run_data['ReturnTemp'].notna().any()
-                    
-                    if dhw_avail:
-                        fig2.add_trace(go.Scatter(x=run_data.index, y=run_data['DHW_Temp'], name="DHW Tank", line=dict(color='orange', width=2)), row=4, col=1)
-                    if ret_avail:
-                        fig2.add_trace(go.Scatter(x=run_data.index, y=run_data['ReturnTemp'], name="Return", line=dict(color='grey', width=1, dash='dot')), row=4, col=1)
-                    
-                    if not (dhw_avail or ret_avail):
-                        fig2.update_yaxes(showticklabels=False, row=4, col=1)
-                    else:
-                        fig2.update_yaxes(title_text="Temp (°C)", row=4, col=1)
+                    # Row 4: DHW / Return Temps (Conditional)
+                    if is_dhw:
+                        dhw_avail = 'DHW_Temp' in run_data.columns and run_data['DHW_Temp'].notna().any()
+                        ret_avail = 'ReturnTemp' in run_data.columns and run_data['ReturnTemp'].notna().any()
+                        
+                        if dhw_avail:
+                            fig2.add_trace(go.Scatter(x=run_data.index, y=run_data['DHW_Temp'], name="DHW Tank", line=dict(color='orange', width=2)), row=4, col=1)
+                        if ret_avail:
+                            fig2.add_trace(go.Scatter(x=run_data.index, y=run_data['ReturnTemp'], name="Return", line=dict(color='grey', width=1, dash='dot')), row=4, col=1)
+                        
+                        if not (dhw_avail or ret_avail):
+                            fig2.update_yaxes(showticklabels=False, row=4, col=1)
+                        else:
+                            fig2.update_yaxes(title_text="Temp (°C)", row=4, col=1)
 
-                    fig2.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=650, hovermode="x unified")
+                    fig2.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=chart_height, hovermode="x unified")
                     st.plotly_chart(fig2, width="stretch", key="run_hydro_chart")
                 
                 with tab3:
