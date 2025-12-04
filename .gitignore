@@ -9,3 +9,6 @@ __pycache__/
 
 # Ignore system files
 .DS_Store
+
+# Ignore specific data file
+sensor_heartbeat_baseline_seasonal.json
