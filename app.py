@@ -3,85 +3,89 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import warnings
+import json
 
 # --- FIX: Console Error Suppression ---
-# 1. Suppress "Mean of empty slice" spam from numpy
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="Mean of empty slice")
 warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*invalid value encountered.*")
-
-# 2. Suppress Pandas "Downcasting" FutureWarning
 pd.set_option('future.no_silent_downcasting', True)
 
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timezone
-import os
-import json
 
-# Import our modularised files
+# --- NEW IMPORTS ---
 import data_loader
 import processing
 import inspector
 import view_trends
 import view_runs
 import view_quality
+import mapping_ui          # NEW
+import config_manager      # NEW
 
 st.set_page_config(page_title="therm", layout="wide", page_icon="🔥")
 
 # === SIDEBAR ===
 st.sidebar.image("assets/therm_logo.png", use_container_width=True)
-st.sidebar.markdown(
-    "**Thermal Health & Efficiency Reporting Module**"
-)
+st.sidebar.markdown("**Thermal Health & Efficiency Reporting Module**")
+
+# === FILE UPLOADER ===
 uploaded_files = st.sidebar.file_uploader("Upload CSV(s)", accept_multiple_files=True, type="csv")
 show_inspector = st.sidebar.checkbox("Show File Inspector", value=False)
 
 # === CACHING LOGIC ===
 @st.cache_data(show_spinner=False) 
-def process_data(files):
-    key = tuple(sorted((f.name, f.size) for f in files))
-    if "cached" in st.session_state and st.session_state["cached"]["key"] == key:
+def process_data(files, user_config):
+    # Create a unique key based on file properties AND the configuration profile
+    # This ensures if you change the mapping, the cache invalidates and re-runs.
+    files_key = tuple(sorted((f.name, f.size) for f in files))
+    config_key = str(user_config.get('mapping', {})) 
+    combined_key = (files_key, config_key)
+
+    if "cached" in st.session_state and st.session_state["cached"]["key"] == combined_key:
         return st.session_state["cached"]
     
-    # START OF CHANGE: Create a placeholder container
+    # Placeholder container for progress bar
     placeholder = st.empty()
     with placeholder.container():
         pbar = st.progress(0, "Loading...")
-        # Define a callback that updates the bar within the placeholder
         progress_cb = lambda t, p: pbar.progress(p, t)
         
-        # NOTE: If we use the placeholder, we must define the cache logic slightly differently,
-        # or rely only on the session state check to handle memoization outside of the Streamlit cache decorator.
-        
-        # Reset progress bar state at the start
-        
-        res = data_loader.load_and_clean_data(files, progress_cb)
+        # 1. Load & Normalize
+        # Pass the user_config to the loader
+        res = data_loader.load_and_clean_data(files, user_config, progress_cb)
         if not res: 
-            placeholder.empty() # Clear the placeholder on error
+            placeholder.empty()
             return None
         
+        # 2. Hydraulics
         pbar.progress(40, "Hydraulics...")
         df = processing.apply_gatekeepers(res["df"])
+        
+        # 3. Runs
         pbar.progress(60, "Runs...")
         runs = processing.detect_runs(df)
+        
+        # 4. Daily Stats
         pbar.progress(80, "Daily Stats...")
         daily = processing.get_daily_stats(df)
-        pbar.progress(100, "Done")
         
-        # CRITICAL FIX: Clear the placeholder after the process is truly complete
+        pbar.progress(100, "Done")
         placeholder.empty()
 
-    # END OF CHANGE (The rest of the cache logic remains outside the placeholder context)
-    
-    # Store history for baselines (moved outside the placeholder container)
+    # Store history (outside cache object)
     st.session_state["raw_history_df"] = res["raw_history"]
     st.session_state["heartbeat_baseline"] = res["baselines"]
     st.session_state["heartbeat_baseline_path"] = res.get("baseline_path")
     
     cache = {
-        "key": key, "df": df, "runs": runs, "daily": daily, 
-        "unmapped": res["unmapped_entities"], "patterns": res["patterns"]
+        "key": combined_key, 
+        "df": df, 
+        "runs": runs, 
+        "daily": daily, 
+        "unmapped": res.get("unmapped_entities", []), # Now handled by mapping
+        "patterns": res["patterns"]
     }
     st.session_state["cached"] = cache
     return cache
@@ -97,40 +101,68 @@ if uploaded_files:
                 st.write(f"Entities found: {len(d['entities_found'])}")
                 st.code("\n".join(d['entities_found']))
     else:
-        data = process_data(uploaded_files)
-        if data:
-            mode = st.sidebar.radio("Analysis Mode", ["Long-Term Trends", "Run Inspector", "Data Quality Audit"])
+        # --- NEW: CONFIGURATION WORKFLOW ---
+        
+        # State A: No Configuration -> Show Wizard
+        if "system_config" not in st.session_state:
+            config_object = mapping_ui.render_configuration_interface(uploaded_files)
             
-            if mode == "Long-Term Trends":
-                # START OF CHANGE: Pass the pre-computed runs list
-                view_trends.render_long_term_trends(data["daily"], data["df"], data["runs"])
-                # END OF CHANGE
-            elif mode == "Run Inspector":
-                view_runs.render_run_inspector(data["df"], data["runs"])
-            elif mode == "Data Quality Audit":
-                # Pass path if available
-                hb_path = st.session_state.get("heartbeat_baseline_path")
-                view_quality.render_data_quality(
-                    data["daily"], data["df"], data["unmapped"], 
-                    data["patterns"], hb_path
-                )
+            if config_object:
+                st.session_state["system_config"] = config_object
+                st.rerun()
+        
+        # State B: Configuration Loaded -> Show Dashboard
+        else:
+            # 1. Show Configuration Controls in Sidebar
+            with st.sidebar:
+                st.divider()
+                st.markdown("### ⚙️ Configuration")
+                st.caption(f"Profile: **{st.session_state['system_config'].get('profile_name')}**")
+                
+                # Download Button
+                mapping_ui.render_config_download(st.session_state["system_config"])
+                
+                # Reset Button
+                if st.button("🔄 Change Profile / Remap"):
+                    del st.session_state["system_config"]
+                    if "cached" in st.session_state:
+                        del st.session_state["cached"]
+                    st.rerun()
+
+            # 2. Process Data (using the config)
+            data = process_data(uploaded_files, st.session_state["system_config"])
+            
+            # 3. Inject AI Context
+            # Make the user's context available to the view modules
+            if "system_config" in st.session_state:
+                st.session_state["ai_context_user"] = st.session_state["system_config"].get("ai_context", {})
+
+            # 4. Render Dashboard
+            if data:
+                mode = st.sidebar.radio("Analysis Mode", ["Long-Term Trends", "Run Inspector", "Data Quality Audit"])
+                
+                if mode == "Long-Term Trends":
+                    view_trends.render_long_term_trends(data["daily"], data["df"], data["runs"])
+                elif mode == "Run Inspector":
+                    view_runs.render_run_inspector(data["df"], data["runs"])
+                elif mode == "Data Quality Audit":
+                    hb_path = st.session_state.get("heartbeat_baseline_path")
+                    view_quality.render_data_quality(
+                        data["daily"], data["df"], data.get("unmapped", []), 
+                        data["patterns"], hb_path
+                    )
 else:
     st.info("Upload CSV files to begin.")
-
-# === ABOUT SECTION (Placed at the bottom of the sidebar) ===
-
-# Using st.expander is a common way to include an "About" section in the sidebar
-st.sidebar.markdown("---") # Optional separator
-
-with st.sidebar.expander("ℹ️ About therm"):
-    st.markdown(
-        """
-        **therm** (Thermal Health & Efficiency Reporting Module) is an open-source tool dedicated to **heat pump performance analysis**.
-        
-        Simply upload your heat pump data logs (in CSV format) to instantly visualize key performance metrics, diagnose hydraulic and control issues, and audit data quality.
-        
-        Our goal is to help homeowners, installers, and researchers **maximize the efficiency** and lifespan of heat pump systems by providing accessible, insightful analytics.
-        
-        *Made by the community, for the community.*
-        """
-    )
+    
+    # About Section
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("ℹ️ About therm"):
+        st.markdown(
+            """
+            **therm** is an open-source tool for **heat pump performance analysis**.
+            
+            Upload your data logs to visualize performance, diagnose issues, and audit data quality.
+            
+            *Version 2.0 (Public Beta)*
+            """
+        )
