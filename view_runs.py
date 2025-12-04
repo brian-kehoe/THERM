@@ -1,154 +1,104 @@
 # view_runs.py
 import streamlit as st
+import plotly.express as px
 import plotly.graph_objects as go
-import pandas as pd # Needed for to_numeric
-from plotly.subplots import make_subplots
-from config import CALC_VERSION, AI_SYSTEM_CONTEXT, TARIFF_PROFILE_ID, CONFIG_HISTORY
+import pandas as pd
 
-def render_run_inspector(df, runs_list):
-    st.title("🔍 Run Inspector")
+def get_friendly_name(internal_key, system_config):
+    """
+    Helper to resolve 'Room_1' -> 'Living Room' using the session config.
+    """
+    if not system_config or "mapping" not in system_config:
+        return internal_key
     
-    # Retrieve mapping for friendly names
-    # Config is stored as {Internal_Key: User_Sensor_Name}
-    user_mapping = st.session_state.get("system_config", {}).get("mapping", {})
+    # The config mapping is { "Friendly Name": "internal_key" } usually, 
+    # but strictly speaking the config passed to backend was { "Friendly": "Raw Entity" }.
+    # The processing.py already handled the internal column renaming.
+    # We need to find the key in the user's config that maps to this internal column.
     
-    def get_friendly_name(internal_key):
-        return user_mapping.get(internal_key, internal_key)
-
-    if 'Power_Clean' in df.columns:
-        total_kwh_in = (df['Power_Clean'].sum() / 1000) / 60
-    else:
-        total_kwh_in = 0
+    # However, in therm v2, the 'mapping' in system_config is:
+    # { "Power": "entity_id_1", "Room_1": "entity_id_2" }
+    # It does NOT store the user's custom text label (e.g. "Living Room").
+    # Wait - the user interface mapping_ui.py usually asks for a label?
+    # Inspecting the user's provided JSON: "Room_1": "ecowitt_weather_indoor_temperature"
+    # It seems the entity ID IS the friendly name in Home Assistant.
+    
+    # We will try to make it prettier by cleaning the entity ID.
+    
+    raw_entity = system_config.get("mapping", {}).get(internal_key, "")
+    if raw_entity:
+        # distinct "sensor.kitchen_temperature" -> "Kitchen Temperature"
+        friendly = raw_entity.replace("sensor.", "").replace("_", " ").title()
+        # Remove common suffixes for brevity
+        friendly = friendly.replace(" Temperature", "").replace(" Value", "")
+        return friendly
         
-    if 'Heat_Clean' in df.columns:
-        total_kwh_out = (df['Heat_Clean'].sum() / 1000) / 60
-    else:
-        total_kwh_out = 0
+    return internal_key
+
+def render_run_inspector(df, runs):
+    st.subheader("Run Inspector")
     
-    if not runs_list:
+    if not runs:
         st.info("No runs detected.")
         return
 
-    runs_list.sort(key=lambda x: x['start'], reverse=True)
+    # Select Run
+    run_ids = [r['id'] for r in runs]
     
-    run_options = {}
-    for r in runs_list:
-        start_str = r['start'].strftime('%d/%m/%Y %H:%M')
-        icon = "🚿" if r['run_type'] == "DHW" else "♨️"
-        
-        # Friendly Zone Label
-        raw_zones = r.get('active_zones', 'None')
-        if raw_zones != "None":
-            # Convert "Zone_1+Zone_2" -> "Kitchen+Upstairs"
-            zone_parts = raw_zones.split('+')
-            friendly_parts = [get_friendly_name(z) for z in zone_parts]
-            zone_label = "+".join(friendly_parts)
-        else:
-            zone_label = "None"
-
-        label = f"{start_str} | {r['duration_mins']}m | {icon} {r['run_type']} ({zone_label})"
-        run_options[label] = r
-
-    option_labels = list(run_options.keys())
-    if "run_selector_idx" not in st.session_state: st.session_state["run_selector_idx"] = 0
-    st.session_state["run_selector_idx"] = min(st.session_state["run_selector_idx"], len(option_labels) - 1)
-
-    nav_prev, nav_select, nav_next = st.columns([1, 4, 1])
-    with nav_prev:
-        if st.button("Previous", disabled=st.session_state["run_selector_idx"] <= 0):
-            st.session_state["run_selector_idx"] = max(0, st.session_state["run_selector_idx"] - 1)
-            st.rerun()
-    with nav_next:
-        if st.button("Next", disabled=st.session_state["run_selector_idx"] >= len(option_labels) - 1):
-            st.session_state["run_selector_idx"] = min(len(option_labels) - 1, st.session_state["run_selector_idx"] + 1)
-            st.rerun()
-    with nav_select:
-        selected_label = st.selectbox("Select Run", options=option_labels, index=st.session_state["run_selector_idx"])
-    st.session_state["run_selector_idx"] = option_labels.index(selected_label)
-
-    selected_run = run_options[selected_label]
-    run_data = df.loc[selected_run['start'] : selected_run['end']]
+    # Create a label for the dropdown that shows date + type
+    run_options = {r['id']: f"Run {r['id']} | {r['start'].strftime('%d %b %H:%M')} | {r['run_type']}" for r in runs}
     
+    selected_id = st.selectbox("Select Run", run_ids, format_func=lambda x: run_options[x])
+    
+    # Get Data
+    run = next(r for r in runs if r['id'] == selected_id)
+    mask = (df.index >= run['start']) & (df.index <= run['end'])
+    run_df = df.loc[mask]
+    
+    # Config for labels
+    config = st.session_state.get("system_config", {})
+
+    # Metrics Row
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Duration", f"{selected_run['duration_mins']}m")
-    c2.metric("COP", f"{selected_run['run_cop']:.2f}")
-    c3.metric("Avg ΔT", f"{selected_run['avg_dt']:.1f}°")
+    c1.metric("Type", run['run_type'])
+    c2.metric("Duration", f"{run['duration_mins']} mins")
+    c3.metric("COP", run['run_cop'])
+    c4.metric("Zones", run['active_zones'])
     
-    flow_val = selected_run.get('avg_flow_rate', selected_run.get('avg_flow', 0))
-    c4.metric("Avg Flow", f"{flow_val:.1f} L/m")
+    # Charts
     
-    tight = dict(margin=dict(l=10, r=10, t=30, b=10), height=350)
-    tab1, tab2, tab3, tab4 = st.tabs(["⚡ Efficiency", "💧 Hydraulics", "🏠 Rooms", "🤖 AI Data"])
+    # 1. Temperatures (Flow/Return/Outdoor)
+    fig_temp = go.Figure()
+    fig_temp.add_trace(go.Scatter(x=run_df.index, y=run_df['FlowTemp'], name='Flow', line=dict(color='red')))
+    fig_temp.add_trace(go.Scatter(x=run_df.index, y=run_df['ReturnTemp'], name='Return', line=dict(color='orange')))
+    if 'OutdoorTemp' in run_df.columns:
+        fig_temp.add_trace(go.Scatter(x=run_df.index, y=run_df['OutdoorTemp'], name='Outdoor', line=dict(color='blue', dash='dot')))
     
-    with tab1:
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        fig.add_trace(go.Scatter(x=run_data.index, y=run_data['Heat_Clean'], name="Heat", fill='tozeroy', line=dict(color='orange', width=0)), secondary_y=False)
-        fig.add_trace(go.Scatter(x=run_data.index, y=run_data['Power_Clean'], name="Power", line=dict(color='red', width=1)), secondary_y=False)
-        if 'Indoor_Power' in run_data.columns:
-            fig.add_trace(go.Scatter(x=run_data.index, y=run_data['Indoor_Power'], name="Indoor", line=dict(color='purple', width=1, dash='dot')), secondary_y=False)
-        fig.add_trace(go.Scatter(x=run_data.index, y=run_data['COP_Graph'], name="COP", line=dict(color='blue', dash='dot', width=1)), secondary_y=True)
-        fig.update_layout(**tight, title="Power & Efficiency", hovermode="x unified")
-        st.plotly_chart(fig, width="stretch", key="run_power")
-
-    with tab2:
-        is_dhw = selected_run['run_type'] == "DHW"
-        rows = 4 if is_dhw else 3
-        titles = ["Delta T", "Flow Rate", "Active Zones"]
-        if is_dhw: titles.append("DHW Temps")
-        fig2 = make_subplots(rows=rows, cols=1, shared_xaxes=True, subplot_titles=titles)
-        
-        fig2.add_trace(go.Scatter(x=run_data.index, y=run_data['DeltaT'], name="ΔT", line=dict(color='green')), row=1, col=1)
-        if 'FlowRate' in run_data.columns:
-            fig2.add_trace(go.Scatter(x=run_data.index, y=run_data['FlowRate'], name="Flow", line=dict(color='cyan')), row=2, col=1)
-        
-        zone_cols = [c for c in run_data.columns if c.startswith('Zone_')]
-        for i, z in enumerate(zone_cols):
-            # FIX: Ensure numeric data for plotting
-            series_numeric = pd.to_numeric(run_data[z], errors='coerce').fillna(0)
-            y_vals = series_numeric.apply(lambda x: i + 0.8 if x > 0 else None)
-            
-            # Use Friendly Name for Legend
-            friendly_z = get_friendly_name(z)
-            fig2.add_trace(go.Scatter(x=run_data.index, y=y_vals, name=friendly_z, mode='lines', line=dict(width=15)), row=3, col=1)
-            
-        if is_dhw and 'DHW_Temp' in run_data.columns:
-             fig2.add_trace(go.Scatter(x=run_data.index, y=run_data['DHW_Temp'], name="DHW Tank", line=dict(color='orange')), row=4, col=1)
-
-        fig2.update_layout(height=600 if is_dhw else 450, hovermode="x unified")
-        st.plotly_chart(fig2, width="stretch", key="run_hydro")
-
-    with tab3:
-        if selected_run['run_type'] == "Heating":
-            fig3 = go.Figure()
-            relevant_rooms = selected_run.get('relevant_rooms', [])
-            all_rooms = [c for c in run_data.columns if c.startswith('Room_')]
-            rooms_to_show = relevant_rooms if relevant_rooms else all_rooms
-            
-            for col in all_rooms:
-                is_relevant = col in rooms_to_show
-                # Use Friendly Name
-                # If mapped, get user name. Else default to Room X
-                friendly_room = get_friendly_name(col)
-                if friendly_room == col: # Fallback if no map
-                    friendly_room = col.replace("Room_", "Room ")
+    fig_temp.update_layout(title="System Temperatures", height=300, margin=dict(l=0, r=0, t=30, b=0))
+    st.plotly_chart(fig_temp, use_container_width=True)
+    
+    # 2. Power & Heat
+    fig_pwr = go.Figure()
+    fig_pwr.add_trace(go.Scatter(x=run_df.index, y=run_df['Power'], name='Electric (W)', fill='tozeroy', line=dict(color='purple')))
+    fig_pwr.add_trace(go.Scatter(x=run_df.index, y=run_df['Heat'], name='Heat (W)', line=dict(color='gold')))
+    
+    fig_pwr.update_layout(title="Power & Heat Output", height=300, margin=dict(l=0, r=0, t=30, b=0))
+    st.plotly_chart(fig_pwr, use_container_width=True)
+    
+    # 3. Room Response
+    # Find relevant room columns
+    room_cols = [c for c in run_df.columns if c.startswith("Room_")]
+    
+    if room_cols:
+        fig_rooms = go.Figure()
+        for r in room_cols:
+            # Check if this room has data
+            if run_df[r].mean() > 0:
+                # GET FRIENDLY NAME
+                label = get_friendly_name(r, config)
+                fig_rooms.add_trace(go.Scatter(x=run_df.index, y=run_df[r], name=label))
                 
-                fig3.add_trace(go.Scatter(
-                    x=run_data.index, y=run_data[col], 
-                    name=friendly_room, 
-                    mode='lines', 
-                    line=dict(width=3 if is_relevant else 1), 
-                    opacity=1.0 if is_relevant else 0.3,
-                    visible=True if is_relevant else "legendonly"
-                ))
-            
-            if 'OutdoorTemp' in run_data.columns:
-                fig3.add_trace(go.Scatter(x=run_data.index, y=run_data['OutdoorTemp'], name="Outdoor", line=dict(color='grey', dash='dash'), yaxis="y2"))
-            
-            fig3.update_layout(title="Room Response", hovermode="x unified", yaxis2=dict(overlaying="y", side="right"), height=400)
-            st.plotly_chart(fig3, width="stretch", key="run_rooms")
-        else:
-            st.info("Room analysis skipped for DHW runs.")
-
-    with tab4:
-        st.write("AI Context Payload (Preview):")
-        st.json(selected_run)
+        fig_rooms.update_layout(title="Room Temperatures", height=300, margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig_rooms, use_container_width=True)
+    else:
+        st.caption("No room sensors mapped.")
