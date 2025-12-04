@@ -30,7 +30,8 @@ def render_run_inspector(df, runs_list):
     # Run Selection Logic
     run_options = {}
     for r in runs_list:
-        start_str = r['start'].strftime('%d/%m %H:%M')
+        # FIX: Changed format to include the year: '%d/%m/%Y %H:%M'
+        start_str = r['start'].strftime('%d/%m/%Y %H:%M')
         
         if r['run_type'] == "DHW":
             icon = "🚿"
