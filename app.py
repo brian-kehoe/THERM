@@ -35,31 +35,46 @@ uploaded_files = st.sidebar.file_uploader("Upload CSV(s)", accept_multiple_files
 show_inspector = st.sidebar.checkbox("Show File Inspector", value=False)
 
 # === CACHING LOGIC ===
-@st.cache_data(show_spinner=False) # <--- Added st.cache_data here for safety, though it's called by the session state logic.
+@st.cache_data(show_spinner=False) 
 def process_data(files):
     key = tuple(sorted((f.name, f.size) for f in files))
     if "cached" in st.session_state and st.session_state["cached"]["key"] == key:
         return st.session_state["cached"]
     
-    pbar = st.progress(0, "Loading...")
-    # NOTE: The progress bar function is defined here, so the cache decorator needs to be managed carefully.
-    # We rely on the session state check to handle the memoization, but adding the decorator is standard practice.
+    # START OF CHANGE: Create a placeholder container
+    placeholder = st.empty()
+    with placeholder.container():
+        pbar = st.progress(0, "Loading...")
+        # Define a callback that updates the bar within the placeholder
+        progress_cb = lambda t, p: pbar.progress(p, t)
+        
+        # NOTE: If we use the placeholder, we must define the cache logic slightly differently,
+        # or rely only on the session state check to handle memoization outside of the Streamlit cache decorator.
+        
+        # Reset progress bar state at the start
+        
+        res = data_loader.load_and_clean_data(files, progress_cb)
+        if not res: 
+            placeholder.empty() # Clear the placeholder on error
+            return None
+        
+        pbar.progress(40, "Hydraulics...")
+        df = processing.apply_gatekeepers(res["df"])
+        pbar.progress(60, "Runs...")
+        runs = processing.detect_runs(df)
+        pbar.progress(80, "Daily Stats...")
+        daily = processing.get_daily_stats(df)
+        pbar.progress(100, "Done")
+        
+        # CRITICAL FIX: Clear the placeholder after the process is truly complete
+        placeholder.empty()
+
+    # END OF CHANGE (The rest of the cache logic remains outside the placeholder context)
     
-    res = data_loader.load_and_clean_data(files, lambda t, p: pbar.progress(p, t))
-    if not res: return None
-    
-    # Store history for baselines
+    # Store history for baselines (moved outside the placeholder container)
     st.session_state["raw_history_df"] = res["raw_history"]
     st.session_state["heartbeat_baseline"] = res["baselines"]
-    st.session_state["heartbeat_baseline_path"] = res.get("baseline_path") # Pass path for UI
-    
-    pbar.progress(40, "Hydraulics...")
-    df = processing.apply_gatekeepers(res["df"])
-    pbar.progress(60, "Runs...")
-    runs = processing.detect_runs(df)
-    pbar.progress(80, "Daily Stats...")
-    daily = processing.get_daily_stats(df)
-    pbar.progress(100, "Done")
+    st.session_state["heartbeat_baseline_path"] = res.get("baseline_path")
     
     cache = {
         "key": key, "df": df, "runs": runs, "daily": daily, 
