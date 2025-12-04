@@ -2,11 +2,11 @@
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import json
-import numpy as np
 from datetime import datetime, timezone
-from config import CALC_VERSION, AI_SYSTEM_CONTEXT, TARIFF_PROFILE_ID, CONFIG_HISTORY, ZONE_TO_ROOM_MAP
+import json
+from config import CALC_VERSION, AI_SYSTEM_CONTEXT, TARIFF_PROFILE_ID, CONFIG_HISTORY
 from utils import safe_div
+
 
 def render_run_inspector(df, runs_list):
     st.title("Run Inspector")
@@ -44,7 +44,7 @@ def render_run_inspector(df, runs_list):
         if r["run_type"] == "DHW":
             icon = "💧 DHW"
             if r.get("heating_during_dhw_detected") or r.get("ghost_pumping_power_detected"):
-                icon += " ⚠️"
+                icon += " ⚠"
         else:
             icon = "🔥 Heating"
         zone_raw = r.get("active_zones", r.get("dominant_zones", "None"))
@@ -57,12 +57,12 @@ def render_run_inspector(df, runs_list):
         st.session_state["run_selector_idx"] = 0
     st.session_state["run_selector_idx"] = min(st.session_state["run_selector_idx"], len(option_labels) - 1)
 
-    nav_prev, nav_select, nav_Next ? = st.columns([1, 4, 1])
+    nav_prev, nav_select, nav_next = st.columns([1, 4, 1])
     with nav_prev:
-        if st.button("? Prev", disabled=st.session_state["run_selector_idx"] <= 0):
+        if st.button("◀ Prev", disabled=st.session_state["run_selector_idx"] <= 0):
             st.session_state["run_selector_idx"] = max(0, st.session_state["run_selector_idx"] - 1)
-    with nav_Next ?:
-        if st.button("Next ?", disabled=st.session_state["run_selector_idx"] >= len(option_labels) - 1):
+    with nav_next:
+        if st.button("Next ▶", disabled=st.session_state["run_selector_idx"] >= len(option_labels) - 1):
             st.session_state["run_selector_idx"] = min(len(option_labels) - 1, st.session_state["run_selector_idx"] + 1)
     with nav_select:
         selected_label = st.selectbox("Select Run", options=option_labels, index=st.session_state["run_selector_idx"])
@@ -274,14 +274,3 @@ def render_run_inspector(df, runs_list):
             }
 
         st.json(ai_payload)
-
-
-
-
-
-
-
-
-
-
-
