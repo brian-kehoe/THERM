@@ -41,7 +41,12 @@ def render_run_inspector(df, runs_list):
         except Exception:
             start_str = str(r["start"])
 
-        icon = "DHW" if r["run_type"] == "DHW" else "Heating"
+        if r["run_type"] == "DHW":
+            icon = "💧 DHW"
+            if r.get("heating_during_dhw_detected") or r.get("ghost_pumping_power_detected"):
+                icon += " ⚠️"
+        else:
+            icon = "🔥 Heating"
         zone_raw = r.get("active_zones", r.get("dominant_zones", "None"))
         zone_label = zone_raw if zone_raw and str(zone_raw).lower() != "none" else "No Zone Data"
         label = f"{start_str} | {r['duration_mins']}m | {icon} ({zone_label})"
@@ -52,12 +57,12 @@ def render_run_inspector(df, runs_list):
         st.session_state["run_selector_idx"] = 0
     st.session_state["run_selector_idx"] = min(st.session_state["run_selector_idx"], len(option_labels) - 1)
 
-    nav_prev, nav_select, nav_next = st.columns([1, 4, 1])
+    nav_prev, nav_select, nav_Next ? = st.columns([1, 4, 1])
     with nav_prev:
-        if st.button("Previous", disabled=st.session_state["run_selector_idx"] <= 0):
+        if st.button("? Prev", disabled=st.session_state["run_selector_idx"] <= 0):
             st.session_state["run_selector_idx"] = max(0, st.session_state["run_selector_idx"] - 1)
-    with nav_next:
-        if st.button("Next", disabled=st.session_state["run_selector_idx"] >= len(option_labels) - 1):
+    with nav_Next ?:
+        if st.button("Next ?", disabled=st.session_state["run_selector_idx"] >= len(option_labels) - 1):
             st.session_state["run_selector_idx"] = min(len(option_labels) - 1, st.session_state["run_selector_idx"] + 1)
     with nav_select:
         selected_label = st.selectbox("Select Run", options=option_labels, index=st.session_state["run_selector_idx"])
@@ -269,6 +274,7 @@ def render_run_inspector(df, runs_list):
             }
 
         st.json(ai_payload)
+
 
 
 
