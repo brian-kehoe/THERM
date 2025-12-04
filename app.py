@@ -24,11 +24,11 @@ import view_quality
 import mapping_ui          # NEW
 import config_manager      # NEW
 
-st.set_page_config(page_title="therm", layout="wide", page_icon="🔥")
+st.set_page_config(page_title="therm v2 beta", layout="wide", page_icon="🔥")
 
 # === SIDEBAR ===
 st.sidebar.image("assets/therm_logo.png", use_container_width=True)
-st.sidebar.markdown("**Thermal Health & Efficiency Reporting Module**")
+st.sidebar.markdown("**Thermal Health & Efficiency Reporting Module v2 beta**")
 
 # === FILE UPLOADER ===
 uploaded_files = st.sidebar.file_uploader("Upload CSV(s)", accept_multiple_files=True, type="csv")
