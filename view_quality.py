@@ -227,17 +227,19 @@ def render_data_quality(
         else:
             st.info("No data for this category.")
 
-    # ------------------------------------------------------------------
-    # TAB 3: Master Sensor Matrix
+        # ------------------------------------------------------------------
+    # TAB 3: Master Sensor Matrix (with categorisation)
     # ------------------------------------------------------------------
     with dq_tab3:
         st.markdown("### Master Sensor Matrix")
 
+        # 1. Build base availability / count table
         count_cols = [
             c
             for c in daily_df.columns
             if c.endswith("_count") or c.endswith("_Count")
         ]
+
         if count_cols:
             flat_data = {}
             for c in count_cols:
@@ -246,29 +248,106 @@ def render_data_quality(
                     .replace("_Count", "")
                     .replace("_count", "")
                 )
+
+                # Skip internal diagnostic counters like short_cycle etc.
                 if "short_cycle" in clean_name.lower():
                     continue
 
                 mode = SENSOR_EXPECTATION_MODE.get(clean_name, "system")
-                series = daily_df[c]
 
+                # Event-style sensors: keep raw counts
                 if mode == "event_only":
-                    flat_data[clean_name] = series.fillna(0).astype(int)
+                    flat_data[clean_name] = (
+                        daily_df[c].fillna(0).astype(int)
+                    )
                 else:
                     flat_data[clean_name] = availability_pct(
-                        series,
+                        daily_df[c],
                         expected_window_series(clean_name, system_on_minutes),
                     ).round(0)
 
             df_flat = pd.DataFrame(flat_data, index=daily_df.index)
-            matrix_disp = format_dq_df(df_flat)
 
-            normal_cols = [
-                c
-                for c in df_flat.columns
-                if SENSOR_EXPECTATION_MODE.get(c, "system") != "event_only"
-            ]
-            styler = matrix_disp.style.format("{:.0f}", na_rep="-")
+            # 2. Rebuild ordered columns with categories
+            new_columns = []        # list of (Category, Sensor)
+            valid_data_cols = []    # ordered sensor keys already placed
+            events_cat = None
+            events_list = []
+
+            # A. Normal groups from SENSOR_GROUPS (except Events)
+            for cat_name, sensors in SENSOR_GROUPS.items():
+                if "Event" in cat_name or "Events" in cat_name:
+                    events_cat = cat_name
+                    events_list = sensors
+                    continue
+
+                found_sensors = [s for s in sensors if s in df_flat.columns]
+                for s in found_sensors:
+                    new_columns.append((cat_name, s))
+                    valid_data_cols.append(s)
+
+            # B. Rooms (grouped into a dedicated '️ Rooms' category)
+            room_cols = sorted(
+                [
+                    c
+                    for c in df_flat.columns
+                    if c.startswith("Room_") and c not in valid_data_cols
+                ]
+            )
+            for r in room_cols:
+                new_columns.append(("️ Rooms", r.replace("Room_", "")))
+                valid_data_cols.append(r)
+
+            # C. Other remaining sensors (non-events)
+            remaining = sorted(
+                [
+                    c
+                    for c in df_flat.columns
+                    if c not in valid_data_cols
+                    and (not events_list or c not in events_list)
+                ]
+            )
+            for rem in remaining:
+                new_columns.append(("Other", rem))
+                valid_data_cols.append(rem)
+
+            # D. Events (appended last, in their own category)
+            if events_cat:
+                found_events = [
+                    s for s in events_list if s in df_flat.columns
+                ]
+                for s in found_events:
+                    new_columns.append((events_cat, s))
+                    valid_data_cols.append(s)
+
+            # 3. Build final MultiIndex DataFrame
+            df_final = df_flat[valid_data_cols].copy()
+            df_final.columns = pd.MultiIndex.from_tuples(new_columns)
+
+            # Reformat index as dd-mm-YYYY if it’s a datetime index
+            df_final = format_dq_df(df_final)
+
+            # 4. Styling: normal vs event-style sensors
+            event_cols = []
+            normal_cols = []
+
+            for col_tuple in df_final.columns:
+                category, sensor_name = col_tuple
+                # For room sensors we stored the name without 'Room_'
+                check_name = (
+                    f"Room_{sensor_name}"
+                    if category == "️ Rooms"
+                    else sensor_name
+                )
+                mode = SENSOR_EXPECTATION_MODE.get(check_name, "system")
+
+                if mode == "event_only" or "defrost" in str(check_name).lower():
+                    event_cols.append(col_tuple)
+                else:
+                    normal_cols.append(col_tuple)
+
+            styler = df_final.style.format("{:.0f}", na_rep="-")
+
             if normal_cols:
                 styler = styler.background_gradient(
                     subset=normal_cols,
@@ -277,9 +356,17 @@ def render_data_quality(
                     vmax=100,
                 )
 
+            if event_cols:
+                # Grey background for event-style sensors
+                styler = styler.map(
+                    lambda x: "background-color: #e0e0e0; color: #555555",
+                    subset=event_cols,
+                )
+
             st.dataframe(styler, width="stretch")
         else:
             st.info("No count-based columns found in daily data.")
+
 
     # ------------------------------------------------------------------
     # TAB 4: Heartbeats
