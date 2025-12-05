@@ -104,16 +104,39 @@ def render_configuration_interface(uploaded_files):
                 loaded = json.load(uploaded_config)
                 defaults.update(loaded)
 
-                # Pre-populate mapping/unit widgets
-                # (actual selectbox defaults are set later via st.session_state)
-                for k, v in defaults.get("mapping", {}).items():
-                    st.session_state[f"map_{k}"] = v
-                for k, v in defaults.get("units", {}).items():
-                    st.session_state[f"unit_{k}"] = v
+                # Build a simple signature for the currently uploaded profile
+                current_sig = (uploaded_config.name, getattr(uploaded_config, "size", None))
+                prev_sig = st.session_state.get("loaded_profile_signature")
+
+                # Only push mapping/unit values into session_state when:
+                #   - a profile is loaded for the first time, or
+                #   - a *different* profile file is chosen
+                if current_sig != prev_sig:
+                    st.session_state["loaded_profile_signature"] = current_sig
+
+                    # 1. Clear any existing mapping/unit keys (only those used)
+                    for k in defaults.get("mapping", {}):
+                        map_key = f"map_{k}"
+                        if map_key in st.session_state:
+                            del st.session_state[map_key]
+
+                    for k in defaults.get("units", {}):
+                        unit_key = f"unit_{k}"
+                        if unit_key in st.session_state:
+                            del st.session_state[unit_key]
+
+                    # 2. Apply defaults freshly
+                    for k, v in defaults.get("mapping", {}).items():
+                        st.session_state[f"map_{k}"] = v
+
+                    for k, v in defaults.get("units", {}).items():
+                        st.session_state[f"unit_{k}"] = v
+
 
                 st.success(f"Loaded {defaults['profile_name']}")
             except Exception:
                 st.error("Failed to load profile JSON.")
+
 
     # Build options list:
     #   - All entities found in the currently uploaded files
@@ -313,6 +336,20 @@ def render_configuration_interface(uploaded_files):
 
 
 def render_config_download(config):
-    export_data = config_manager.export_config_for_sharing(config)
-    export_data["rooms_per_zone"] = config.get("rooms_per_zone", {})
-    st.download_button("💾 Download Profile", json.dumps(export_data, indent=2), "therm_profile.json", "application/json")
+    export_data = config_manager.export_config_for_sharing(config_object)
+
+    # Ensure profile name is kept
+    export_data["profile_name"] = profile_name
+
+    # Ensure rooms_per_zone is kept
+    export_data["rooms_per_zone"] = rooms_per_zone
+
+    st.download_button(
+        label=" 1. Save Configuration",
+        data=json.dumps(export_data, indent=2),
+        file_name=f"therm_profile_{profile_name.replace(' ', '_')}.json",
+        mime="application/json",
+        type="secondary",
+        key=f"save_btn_{profile_name.replace(' ', '_')}"
+    )
+
