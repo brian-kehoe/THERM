@@ -335,14 +335,22 @@ def render_configuration_interface(uploaded_files):
     return None
 
 
-def render_config_download(config):
-    export_data = config_manager.export_config_for_sharing(config_object)
+def render_config_download(config: dict) -> None:
+    """
+    Download helper for an already-built config object.
 
-    # Ensure profile name is kept
+    Uses the same export logic as the main configuration interface,
+    but works with an existing config passed in from the caller.
+    """
+    # Derive profile name from the config, with a sensible default
+    profile_name = config.get("profile_name", "My Heat Pump")
+
+    # Start from the canonical sharing export
+    export_data = config_manager.export_config_for_sharing(config)
+
+    # Ensure key fields are preserved
     export_data["profile_name"] = profile_name
-
-    # Ensure rooms_per_zone is kept
-    export_data["rooms_per_zone"] = rooms_per_zone
+    export_data["rooms_per_zone"] = config.get("rooms_per_zone", {})
 
     st.download_button(
         label=" 1. Save Configuration",
@@ -350,6 +358,7 @@ def render_config_download(config):
         file_name=f"therm_profile_{profile_name.replace(' ', '_')}.json",
         mime="application/json",
         type="secondary",
-        key=f"save_btn_{profile_name.replace(' ', '_')}"
+        key=f"save_btn_{profile_name.replace(' ', '_')}",
     )
+
 

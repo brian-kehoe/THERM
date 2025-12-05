@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 
+# Accept a broader set of time column names, including Home Assistant history exports
 _TIME_CANDIDATES = [
     "Time",
     "time",
@@ -13,6 +14,8 @@ _TIME_CANDIDATES = [
     "datetime",
     "DateTime",
     "Date",
+    # Home Assistant history export timestamp
+    "last_changed",
 ]
 
 
