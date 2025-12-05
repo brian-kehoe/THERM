@@ -16,6 +16,7 @@ Takes structured data produced by view_quality_core.build_quality_model().
 import streamlit as st
 import pandas as pd
 import numpy as np
+from typing import List         # ← FIX
 
 
 # ================================================================

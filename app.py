@@ -25,12 +25,10 @@ import processing
 import data_resolution                 # ← NEW MODULE IMPORT
 from utils import safe_div
 
-import view_quality                    # Unchanged import
-import view_trends
-import view_runs
 import view_quality
 import view_trends
 import view_runs
+
 
 # -------------------------------------------------------------------
 # Sidebar configuration

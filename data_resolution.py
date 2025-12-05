@@ -10,6 +10,13 @@ This module performs:
 3. Detection of downsampled / degraded data outside the HR window
 4. Confidence scoring (B1 model: High → Minimal)
 5. Metadata export for processing + UI warning banners
+
+Input expectations (wide format):
+    - Either:
+        a) A DataFrame with a 'timestamp' column (any type convertible to datetime)
+       or
+        b) A DataFrame with a DatetimeIndex (will be reset to 'timestamp')
+    - All other columns are treated as sensor value columns.
 """
 
 import numpy as np
@@ -31,6 +38,44 @@ def _compute_intervals(series: pd.Series):
 
 
 # ================================================================
+# STEP 0 — Normalise input dataframe
+# ================================================================
+def _ensure_timestamp_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure there is a 'timestamp' column of dtype datetime64[ns].
+
+    Accepts:
+      - Wide df with DatetimeIndex
+      - Wide df with a 'timestamp' column
+
+    Returns:
+      df_with_ts: copy of df with a proper 'timestamp' column.
+    """
+    if df is None or df.empty:
+        return df
+
+    df_work = df.copy()
+
+    if "timestamp" in df_work.columns:
+        df_work["timestamp"] = pd.to_datetime(df_work["timestamp"], errors="coerce")
+        df_work = df_work.dropna(subset=["timestamp"])
+        return df_work
+
+    # Fallback: use DatetimeIndex if available
+    if isinstance(df_work.index, pd.DatetimeIndex):
+        idx_name = df_work.index.name or "timestamp"
+        df_work = df_work.reset_index().rename(columns={idx_name: "timestamp"})
+        df_work["timestamp"] = pd.to_datetime(df_work["timestamp"], errors="coerce")
+        df_work = df_work.dropna(subset=["timestamp"])
+        return df_work
+
+    raise ValueError(
+        "data_resolution.analyze_resolution() expects either a 'timestamp' column "
+        "or a DatetimeIndex on the input dataframe."
+    )
+
+
+# ================================================================
 # STEP 1 — Detect High-Resolution Window (HR window)
 # ================================================================
 def detect_high_res_window(df: pd.DataFrame, max_days: int = 30):
@@ -39,10 +84,12 @@ def detect_high_res_window(df: pd.DataFrame, max_days: int = 30):
     - Looks for dense timestamp regions
     - Window size dynamically adapts (3–10 days)
 
+    df must contain a 'timestamp' column of dtype datetime64[ns].
+
     Returns:
-        (start_ts, end_ts)
+        (start_ts, end_ts) or (None, None)
     """
-    if df.empty:
+    if df is None or df.empty:
         return None, None
 
     df_sorted = df.sort_values("timestamp")
@@ -97,14 +144,16 @@ def compute_baseline_intervals(df: pd.DataFrame, hr_start, hr_end):
     - baseline median interval (seconds)
     - classification: periodic_high / periodic_med / periodic_low /
                       event_based / hourly_native / irregular
+
+    df must contain a 'timestamp' column; all other columns are treated as sensors.
     """
-    if hr_start is None or hr_end is None:
+    if hr_start is None or hr_end is None or df is None or df.empty:
         return {}
 
     baseline = {}
     hr_df = df[(df["timestamp"] >= hr_start) & (df["timestamp"] <= hr_end)]
 
-    # Only continuous sensors (exclude non-value columns)
+    # All columns except timestamp/entity_id are treated as values (wide format)
     value_cols = [c for c in df.columns if c not in ["timestamp", "entity_id"]]
 
     for col in value_cols:
@@ -154,14 +203,24 @@ def compute_baseline_intervals(df: pd.DataFrame, hr_start, hr_end):
 # ================================================================
 # STEP 3 — Compute degradation outside HR window
 # ================================================================
-def classify_resolution_vs_baseline(full_df, baseline):
+def classify_resolution_vs_baseline(full_df: pd.DataFrame, baseline: dict):
     """
     For each sensor, compare full data intervals vs baseline intervals.
     Produces:
-        resolution_status[col] = {baseline_interval, observed_interval, confidence, degraded}
+        resolution_status[col] = {
+            baseline_interval,
+            observed_interval,
+            confidence,
+            degraded
+        }
+
+    full_df must contain 'timestamp' and the same value columns used for baseline.
     """
 
     resolution_map = {}
+    if full_df is None or full_df.empty:
+        return resolution_map
+
     value_cols = [c for c in full_df.columns if c not in ["timestamp", "entity_id"]]
 
     for col in value_cols:
@@ -227,12 +286,14 @@ def classify_resolution_vs_baseline(full_df, baseline):
 # ================================================================
 # STEP 4 — Estimate retention window
 # ================================================================
-def estimate_retention_days(df):
+def estimate_retention_days(df: pd.DataFrame):
     """
     Estimate how long high-resolution data is kept before downsampling.
     Looks for the earliest point where dt jumps significantly for multiple sensors.
+
+    df must contain 'timestamp'.
     """
-    if df.empty:
+    if df is None or df.empty:
         return None
 
     df_sorted = df.sort_values("timestamp")
@@ -269,11 +330,14 @@ def estimate_retention_days(df):
 # ================================================================
 # STEP 5 — Confidence for Heat & COP (B1 Propagation)
 # ================================================================
-def compute_global_confidence(res_map):
+def compute_global_confidence(res_map: dict):
     """
-    Determine global heat & COP confidence:
+    Determine global heat & COP confidence (B1):
         heat_conf = min(FT_conf, RT_conf, Power_conf)
         cop_conf  = min(heat_conf, Power_conf)
+
+    Only canonical names are used here:
+        FlowTemp, ReturnTemp, Power
     """
 
     def _get(col):
@@ -287,6 +351,7 @@ def compute_global_confidence(res_map):
 
     # Simple priority order
     order = ["minimal", "very_low", "low", "medium", "high"]
+
     def score(c):
         if c not in order:
             return -1
@@ -305,7 +370,7 @@ def compute_global_confidence(res_map):
 
 
 # ================================================================
-# Main entry point used by data_loader
+# Main entry point
 # ================================================================
 def analyze_resolution(df: pd.DataFrame):
     """
@@ -315,6 +380,11 @@ def analyze_resolution(df: pd.DataFrame):
         resolution comparison
         retention estimation
         global confidence scoring
+
+    Input:
+      df  — wide-format dataframe with either:
+              • a 'timestamp' column, or
+              • a DatetimeIndex.
 
     Returns:
         {
@@ -326,13 +396,29 @@ def analyze_resolution(df: pd.DataFrame):
           "global_confidence": {...}
         }
     """
-    hr_start, hr_end = detect_high_res_window(df)
+    if df is None or df.empty:
+        return {
+            "hr_start": None,
+            "hr_end": None,
+            "baseline": {},
+            "resolution_map": {},
+            "retention_days": None,
+            "global_confidence": {
+                "heat_confidence": "unknown",
+                "cop_confidence": "unknown",
+            },
+        }
 
-    baseline = compute_baseline_intervals(df, hr_start, hr_end)
+    # Normalise input to have a proper 'timestamp' column
+    df_ts = _ensure_timestamp_column(df)
 
-    resolution_map = classify_resolution_vs_baseline(df, baseline)
+    hr_start, hr_end = detect_high_res_window(df_ts)
 
-    retention_days = estimate_retention_days(df)
+    baseline = compute_baseline_intervals(df_ts, hr_start, hr_end)
+
+    resolution_map = classify_resolution_vs_baseline(df_ts, baseline)
+
+    retention_days = estimate_retention_days(df_ts)
 
     global_conf = compute_global_confidence(resolution_map)
 
