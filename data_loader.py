@@ -1,227 +1,113 @@
-# data_loader.py
+"""
+data_loader.py
+---------------
+Main orchestration layer for data ingestion.
+
+Pipeline (DL-A architecture):
+  1. Read uploaded CSV files           → file_reader.read_files
+  2. Reshape to wide-format            → dataframe_reshaper.reshape_data
+  3. Resample to uniform 1-minute grid → resampler.resample_wide
+  4. Apply user mappings               → data_mapper.map_and_clean
+  5. Compute resolution + confidence   → data_resolution.analyze_resolution
+  6. Return df + metadata for app use
+"""
 
 import pandas as pd
-import streamlit as st
+from typing import List, Dict
+
+from file_reader import read_files
+from dataframe_reshaper import reshape_data
+from resampler import resample_wide
+from data_mapper import map_and_clean
+from data_resolution import analyze_resolution
 
 
-# Accept a broader set of time column names, including Home Assistant history exports
-_TIME_CANDIDATES = [
-    "Time",
-    "time",
-    "timestamp",
-    "Timestamp",
-    "date",
-    "datetime",
-    "DateTime",
-    "Date",
-    # Home Assistant history export timestamp
-    "last_changed",
-]
-
-
-def _normalise_time_column(temp: pd.DataFrame, filename: str) -> pd.DataFrame | None:
+# ================================================================
+# Master API: load_and_clean_data
+# ================================================================
+def load_and_clean_data(uploaded_files: List,
+                        user_config: Dict,
+                        progress_callback=None):
     """
-    Ensure the dataframe has a valid 'Time' column in datetime format.
+    Master function used by the application to process uploads.
 
-    - Looks for a set of common timestamp column names.
-    - Parses to datetime with day-first semantics.
-    - Drops rows with invalid timestamps.
-    - Renames the chosen column to 'Time'.
+    Inputs:
+      uploaded_files: list of file-like objects
+      user_config: mapping + other config from System Settings UI
+      progress_callback: optional function(step_name, pct)
 
-    Returns:
-        Cleaned dataframe, or None if no usable time column is found.
+    Returns dict:
+      {
+         "df": cleaned, resampled, mapped dataframe,
+         "raw_history": dataframe before resampling,
+         "resolution": resolution_metadata,
+      }
     """
-    time_col = None
-    for cand in _TIME_CANDIDATES:
-        if cand in temp.columns:
-            time_col = cand
-            break
 
-    if time_col is None:
-        st.error(
-            f"{filename} has no recognised time column "
-            f"(expected one of: {_TIME_CANDIDATES}) – skipping this file."
-        )
-        return None
+    def _step(name, pct):
+        if progress_callback:
+            progress_callback(name, pct)
 
-    temp = temp.copy()
-    temp[time_col] = pd.to_datetime(
-        temp[time_col],
-        dayfirst=True,
-        errors="coerce",
-    )
-    temp = temp.dropna(subset=[time_col])
+    # ------------------------------------------------------------
+    # STEP 1 — Read files (long-format)
+    # ------------------------------------------------------------
+    _step("Reading files", 5)
+    parsed = read_files(uploaded_files)
 
-    if temp.empty:
-        st.error(
-            f"{filename} has no valid timestamps after parsing – skipping this file."
-        )
-        return None
+    state_frames = parsed.get("state", [])
+    numeric_frames = parsed.get("numeric", [])
 
-    if time_col != "Time":
-        temp = temp.rename(columns={time_col: "Time"})
+    # ------------------------------------------------------------
+    # STEP 2 — Reshape → wide-format merged DF
+    # ------------------------------------------------------------
+    _step("Reshaping data", 20)
+    df_wide = reshape_data(state_frames, numeric_frames)
 
-    return temp
-
-
-def load_and_clean_data(files, user_config, progress_cb=None):
-    """
-    Robust data loader that handles both Numeric (Float) and State (Text) CSV files.
-
-    - Reads each uploaded CSV.
-    - Ensures a valid 'Time' column exists (or skips the file).
-    - Splits into numeric ('value') vs state ('state') tables.
-    - Pivots to wide format: index=Time, columns=entity_id.
-    - Resamples to 1-minute resolution (mean for numeric, ffill for state).
-    - Merges numeric + state.
-    - Applies simple column renaming based on user_config["mapping"].
-    - Finally, coerces all sensor-like columns to numeric, except explicit
-      textual mode columns (ValveMode, DHW_Mode).
-
-    Returns:
-        {
-          "df": combined_df,
-          "raw_history": combined_df.copy(),
-          "baselines": None,
-          "patterns": None,
+    if df_wide is None or df_wide.empty:
+        return {
+            "df": None,
+            "raw_history": None,
+            "resolution": {
+                "error": "No valid data found in uploaded files."
+            },
         }
-    """
-    if not files:
-        return None
 
-    numeric_dfs = []
-    state_dfs = []
+    # Keep a copy before resampling for debugging / UI reference
+    raw_history = df_wide.copy()
 
-    # 1. Read and Classify Files
-    for i, f in enumerate(files):
-        try:
-            # Read CSV
-            f.seek(0)
-            temp = pd.read_csv(f)
+    # ------------------------------------------------------------
+    # STEP 3 — Resample
+    # ------------------------------------------------------------
+    _step("Resampling", 40)
+    df_resampled = resample_wide(df_wide, freq="1min")
+    df_resampled.index.name = "timestamp"
 
-            # Normalise / parse time column
-            temp = _normalise_time_column(temp, getattr(f, "name", "uploaded file"))
-            if temp is None:
-                # Skip files with no usable time column
-                continue
+    # ------------------------------------------------------------
+    # STEP 4 — Apply user mapping + type coercion
+    # ------------------------------------------------------------
+    _step("Applying mappings", 60)
+    df_mapped = map_and_clean(df_resampled, user_config)
 
-            # Classify based on columns
-            if "state" in temp.columns:
-                state_dfs.append(temp)
-            elif "value" in temp.columns:
-                numeric_dfs.append(temp)
+    # ------------------------------------------------------------
+    # STEP 5 — Compute resolution metadata
+    # ------------------------------------------------------------
+    _step("Analyzing resolution", 80)
 
-            if progress_cb:
-                progress_cb(
-                    f"Read {getattr(f, 'name', 'uploaded file')}",
-                    (i / max(len(files), 1)) * 0.2,
-                )
+    # resolution engine expects a long-style timestamp column
+    df_for_resolution = df_mapped.reset_index().rename(columns={"timestamp": "timestamp"})
 
-        except Exception as e:
-            st.error(f"Error reading {getattr(f, 'name', 'uploaded file')}: {e}")
+    resolution_meta = analyze_resolution(df_for_resolution)
 
-    # 2. Process Numeric Data (Resample: Mean)
-    df_numeric_wide = pd.DataFrame()
-    if numeric_dfs:
-        if progress_cb:
-            progress_cb("Processing numeric data...", 0.3)
+    # Attach metadata to dataframe for downstream modules
+    df_mapped.attrs["resolution"] = resolution_meta
 
-        df_num = pd.concat(numeric_dfs, ignore_index=True)
-
-        # Pivot: Index=Time, Columns=entity_id, Values=value
-        # We group by Time/entity_id first to handle any duplicate timestamps.
-        df_numeric_wide = (
-            df_num.groupby(["Time", "entity_id"])["value"]
-            .mean()
-            .unstack()
-        )
-
-        # Resample to 1 minute, interpolating missing values
-        df_numeric_wide = (
-            df_numeric_wide.resample("1min").mean().interpolate(limit=30)
-        )
-
-    # 3. Process State Data (Resample: FFill)
-    df_state_wide = pd.DataFrame()
-    if state_dfs:
-        if progress_cb:
-            progress_cb("Processing state data...", 0.5)
-
-        df_state = pd.concat(state_dfs, ignore_index=True)
-
-        # Pivot: Index=Time, Columns=entity_id, Values=state
-        # For state, we take the 'last' known state if duplicates exist
-        df_state_wide = (
-            df_state.groupby(["Time", "entity_id"])["state"]
-            .last()
-            .unstack()
-        )
-
-        # Resample to 1 minute, FORWARD FILLING the state (state persists until changed)
-        df_state_wide = df_state_wide.resample("1min").ffill()
-
-    # 4. Merge
-    if progress_cb:
-        progress_cb("Merging datasets...", 0.6)
-
-    if df_numeric_wide.empty and df_state_wide.empty:
-        return None
-    elif df_numeric_wide.empty:
-        combined_df = df_state_wide
-    elif df_state_wide.empty:
-        combined_df = df_numeric_wide
-    else:
-        # Outer join to align timestamps
-        combined_df = df_numeric_wide.join(df_state_wide, how="outer")
-
-    # 5. Apply Mapping (simple column rename)
-    if progress_cb:
-        progress_cb("Applying sensor mapping...", 0.8)
-    if user_config and "mapping" in user_config:
-        # Create reverse map: {Raw_ID: Friendly_Column}
-        # The config has {Friendly: Raw}
-        forward_map = user_config.get("mapping", {}) or {}
-        if isinstance(forward_map, dict) and forward_map:
-            reverse_map = {v: k for k, v in forward_map.items()}
-            combined_df = combined_df.rename(columns=reverse_map)
-
-    # 6. Final Cleanup
-
-    # Ensure index is sorted
-    combined_df = combined_df.sort_index()
-
-    # --- Global numeric coercion (aligned with main branch) ----------------
-    #
-    # At this point combined_df contains:
-    #   - Numeric channels from Grafana exports ("value" path)
-    #   - State-based channels from Home Assistant history ("state" path)
-    #
-    # We want all sensor-like columns to be numeric where possible, and keep
-    # only a small, explicit set of textual mode columns as strings.
-    #
-    # This mirrors the main-branch invariant: processing.py can assume that
-    # FlowRate, Power, temperatures, etc. are numeric when doing physics and
-    # run detection.
-    TEXT_COLS = {"ValveMode", "DHW_Mode"}  # extend if you add more textual modes
-
-    for col in combined_df.columns:
-        if col in TEXT_COLS:
-            # Explicitly textual columns stay as-is
-            continue
-        try:
-            combined_df[col] = pd.to_numeric(combined_df[col], errors="coerce")
-        except Exception:
-            # If conversion fails for some weird column, leave it as-is.
-            # Downstream code should ignore non-numeric channels.
-            pass
-    # ----------------------------------------------------------------------
-
-    # Fill small gaps (limited ffill to avoid masking real outages)
-    combined_df = combined_df.ffill(limit=5)
+    # ------------------------------------------------------------
+    # DONE
+    # ------------------------------------------------------------
+    _step("Completed", 100)
 
     return {
-        "df": combined_df,
-        "raw_history": combined_df.copy(),
-        "baselines": None,
-        "patterns": None,
+        "df": df_mapped,
+        "raw_history": raw_history,
+        "resolution": resolution_meta,
     }
