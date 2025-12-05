@@ -86,7 +86,6 @@ def _debug_engine_state(d: pd.DataFrame, label: str = "") -> None:
 
 # --- HEAT + COP ENGINE -------------------------------------------------------
 def _ensure_heat_and_cop(
-
     d: pd.DataFrame, thresholds: dict | None = None
 ) -> pd.DataFrame:
     """
@@ -98,9 +97,7 @@ def _ensure_heat_and_cop(
     This replaces the previously duplicated HEAT OUTPUT blocks and ensures
     we only run this logic once per dataframe.
     """
-    if thresholds is None:
-        thresholds = {}
-    elif not isinstance(thresholds, dict):
+    if thresholds is None or not isinstance(thresholds, dict):
         thresholds = {}
 
     # --- HEAT OUTPUT LOGIC ---
@@ -114,32 +111,36 @@ def _ensure_heat_and_cop(
         has_heat_data = heat_series.abs().sum() > 0
         d["Heat"] = heat_series  # normalise type
 
+    # Precompute hydraulics series regardless; safe even if missing
+    flow = pd.to_numeric(d.get("FlowRate", 0), errors="coerce").fillna(0)
+    delta_t = pd.to_numeric(d.get("DeltaT", 0), errors="coerce").fillna(0)
+    freq = pd.to_numeric(d.get("Freq", 0), errors="coerce").fillna(0)
+
+    # Thresholds
+    min_flow = thresholds.get("min_flow_rate_lpm", 0)
+    min_freq = thresholds.get("min_freq_for_heat", 0)
+    min_dt = thresholds.get("min_valid_delta_t", 0)
+    max_dt = thresholds.get("max_valid_delta_t", 999)
+
     if not has_heat_data:
         if has_flow:
-            # Only derive when we have hydraulics
-            min_flow = thresholds.get("min_flow_rate_lpm", 0)
-            min_freq = thresholds.get("min_freq_for_heat", 0)
+            # Basic physics: Heat [W] = c * m_dot * ΔT
+            heat_raw = SPECIFIC_HEAT_CAPACITY * flow * delta_t
 
-            flow = pd.to_numeric(d["FlowRate"], errors="coerce").fillna(0)
-            delta_t = pd.to_numeric(d.get("DeltaT", 0), errors="coerce").fillna(0)
-            freq = pd.to_numeric(d.get("Freq", 0), errors="coerce").fillna(0)
+            # Gatekeepers
+            # UPDATED: remove frequency as a hard gatekeeper
+            valid = (
+                (flow >= min_flow)
+                # (freq >= min_freq)  # disabled as gate
+                & (delta_t.abs() >= min_dt)
+                & (delta_t.abs() <= max_dt)
+            )
 
-        # Basic physics: Heat [W] = c * m_dot * ΔT
-        heat_raw = SPECIFIC_HEAT_CAPACITY * flow * delta_t
-
-        # Gatekeepers
-        min_dt = thresholds.get("min_valid_delta_t", 0)
-        max_dt = thresholds.get("max_valid_delta_t", 999)
-
-        valid = (
-            (flow >= min_flow)
-            & (freq >= min_freq)
-            & (delta_t.abs() >= min_dt)
-            & (delta_t.abs() <= max_dt)
-        )
-
-        d["Heat"] = 0.0
-        d.loc[valid, "Heat"] = heat_raw[valid]
+            d["Heat"] = 0.0
+            d.loc[valid, "Heat"] = heat_raw[valid]
+        else:
+            # No Heat sensor and no FlowRate → no energy channel
+            d["Heat"] = 0.0
 
         # Optional: debug gatekeepers
         try:
@@ -150,7 +151,7 @@ def _ensure_heat_and_cop(
                     {
                         "rows_total": int(len(d)),
                         "rows_flow_gt0": int((flow > 0).sum()),
-                        "rows_valid": int(valid.sum()),
+                        "rows_valid": int(valid.sum()) if has_flow else 0,
                         "min_flow_threshold": float(min_flow),
                         "min_freq_threshold": float(min_freq),
                         "min_dt_threshold": float(min_dt),
@@ -158,15 +159,18 @@ def _ensure_heat_and_cop(
                     },
                 )
         except Exception:
+            # Debug is best-effort only; never break the engine
             pass
 
+    # No heat when compressor off (applies to native or derived Heat)
+    if "is_active" in d.columns:
+        d.loc[~d["is_active"].astype(bool), "Heat"] = 0.0
 
-            # No heat when compressor off
-            if "is_active" in d.columns:
-                d.loc[~d["is_active"].astype(bool), "Heat"] = 0.0
-        else:
-            # No Heat sensor and no FlowRate → no energy channel
-            d["Heat"] = 0.0
+    # Normalise Heat and DeltaT again to be safe (prevent NaN cascades)
+    if "Heat" in d.columns:
+        d["Heat"] = pd.to_numeric(d["Heat"], errors="coerce").fillna(0.0)
+    if "DeltaT" in d.columns:
+        d["DeltaT"] = pd.to_numeric(d["DeltaT"], errors="coerce").fillna(0.0)
 
     # ------------------------------------------------------------------
     # FIX: Negative Power readings from Home Assistant
@@ -184,14 +188,14 @@ def _ensure_heat_and_cop(
     d["Power_Heating"] = np.where(is_heating, d["Power"], 0)
     d["Power_DHW"] = np.where(is_dhw, d["Power"], 0)
 
-
     d["Heat_Heating"] = np.where(is_heating, d["Heat"], 0)
     d["Heat_DHW"] = np.where(is_dhw, d["Heat"], 0)
 
     d["COP_Real"] = safe_div(d["Heat"], d["Power"])
-    d["COP_Graph"] = d["COP_Real"].clip(0, 6)
+    d["COP_Graph"] = d["COP_Real"].clip(lower=0, upper=10)
 
     return d
+
 
 
 # --- TARIFF ENGINE -----------------------------------------------------------
@@ -465,8 +469,13 @@ def apply_gatekeepers(df: pd.DataFrame, user_config: dict | None = None) -> pd.D
 
     d["Cost_Inc"] = (d["Power"] / 1000.0 / 60.0) * d["Current_Rate"]
 
-    return d
+    # Final engine debug snapshot
+    _debug_engine_state(d, "final engine df")
 
+    # Removed automatic CSV write to disk.
+    # Manual downloads via the Streamlit Data Debugger expander are now the intended method.
+
+    return d
 
 # --- GLOBAL STATS (CANONICAL) -----------------------------------------------
 def compute_global_stats(df: pd.DataFrame) -> dict:
