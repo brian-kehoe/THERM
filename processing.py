@@ -345,10 +345,7 @@ def apply_gatekeepers(df: pd.DataFrame, user_config: dict | None = None) -> pd.D
         # Data Type Fix: Ensure all zone columns are numeric
         for z in zone_cols:
             if not pd.api.types.is_numeric_dtype(d[z]):
-                st.write(
-                    f"⚠️ coercing non-numeric column {z} to numbers "
-                    f"(Values: {d[z].unique()[:3]})"
-                )
+                # Silent coercion of 'on'/'off'/boolish strings to 1/0
                 d[z] = (
                     d[z]
                     .astype(str)
@@ -356,6 +353,7 @@ def apply_gatekeepers(df: pd.DataFrame, user_config: dict | None = None) -> pd.D
                     .replace({"on": 1, "off": 0, "true": 1, "false": 0})
                 )
                 d[z] = pd.to_numeric(d[z], errors="coerce").fillna(0)
+
 
         d["Active_Zones_Count"] = d[zone_cols].sum(axis=1)
         z_map = {z: get_friendly_name(z, user_config) for z in zone_cols}

@@ -112,16 +112,23 @@ def render_configuration_interface(uploaded_files):
 
     st.subheader("3. Zones & Rooms")
     
-    with st.expander("Step A: Map Room Sensors", expanded=True):
-        mapped_rooms_labels = {} 
-        r_cols = st.columns(2)
-        for i in range(1, 9):
-            r_key = f"{ROOM_SENSOR_PREFIX}{i}"
-            with r_cols[(i-1)%2]:
-                r_s, _ = render_sensor_row(f"Room Sensor {i}", r_key, options, defaults)
-                if r_s != "None":
-                    user_map[r_key] = r_s
-                    mapped_rooms_labels[r_key] = r_s
+    with st.expander("➕ Advanced / Environmental"):
+        # Merge and sort by label alphabetically
+        merged = {**OPTIONAL_SENSORS, **ENVIRONMENTAL_SENSORS}
+        for key, d in sorted(merged.items(), key=lambda kv: kv[1].get("label", kv[0]).lower()):
+            s, u = render_sensor_row(
+                d["label"],
+                key,
+                options,
+                defaults,
+                False,
+                d.get("description", None),
+            )
+            if s != "None":
+                user_map[key] = s
+                if u:
+                    user_units[key] = u
+
 
     with st.expander("Step B: Configure Zones & Link Rooms", expanded=True):
         rooms_per_zone = {}
