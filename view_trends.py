@@ -1,4 +1,5 @@
 # view_trends.py
+
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
@@ -6,298 +7,392 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timezone
 import json
 import pandas as pd
+
 from config import CALC_VERSION, AI_SYSTEM_CONTEXT
 from utils import safe_div
 
 
-def render_long_term_trends(daily_df, raw_df, runs_list):
-    st.title("Long-Term Performance")
+def render_long_term_trends(daily_df: pd.DataFrame, raw_df: pd.DataFrame, runs_list: list) -> None:
+    """
+    Long-term performance view:
+    - KPI cards
+    - Daily stacked energy balance
+    - Environmental charts
+    - Weather-compensation scatter (heating)
+    - DHW run scatter
+    - AI JSON export for long-term analysis
+    """
+    st.title(" Long-Term Performance")
 
-    if daily_df.empty:
+    if daily_df is None or daily_df.empty:
         st.warning("No valid daily data found.")
         return
 
-    caps = st.session_state.get("capabilities", {})
-    has_flowrate = caps.get("has_flowrate", True)
-
-    # Detect whether we actually have a heat/energy channel
-    has_heat_energy = (
-        ('Heat_Heating_kWh' in daily_df.columns and daily_df['Heat_Heating_kWh'].sum() > 0) or
-        ('Heat_DHW_kWh' in daily_df.columns and daily_df['Heat_DHW_kWh'].sum() > 0)
-    )
-
+    # Tabs: main performance vs AI export
     tab_main, tab_ai = st.tabs(["Performance", "AI Report"])
 
+    # ----------------------------------------------------------------------
+    # PERFORMANCE TAB
+    # ----------------------------------------------------------------------
     with tab_main:
+        # 1. KPI Metrics
         k1, k2, k3, k4 = st.columns(4)
+
+        total_heat = float(daily_df.get("Total_Heat_kWh", 0).sum())
+        total_elec = float(daily_df.get("Total_Electricity_kWh", 0).sum())
+        total_cost = float(daily_df.get("Daily_Cost_Euro", 0).sum())
+        scop = safe_div(total_heat, total_elec)
+
         k1.metric("Days", len(daily_df))
-
-        total_heat_col = daily_df.get('Total_Heat_kWh', pd.Series(dtype=float))
-        total_elec_col = daily_df.get('Total_Electricity_kWh', pd.Series(dtype=float))
-        total_cost_col = daily_df.get('Daily_Cost_Euro', pd.Series(dtype=float))
-
-        total_heat = float(total_heat_col.sum()) if not total_heat_col.empty else 0.0
-        total_elec = float(total_elec_col.sum()) if not total_elec_col.empty else 0.0
-        total_cost = float(total_cost_col.sum()) if not total_cost_col.empty else 0.0
-
-        if has_heat_energy:
-            k2.metric("Total Heat", f"{total_heat:.0f} kWh")
-            scop = safe_div(total_heat, total_elec)
-            k4.metric("Period SCOP", f"{scop:.2f}")
-        else:
-            scop = 0
-            k2.metric("Total Heat", "N/A")
-            k4.metric("Period SCOP", "N/A")
-
+        k2.metric("Total Heat", f"{total_heat:.0f} kWh")
         k3.metric("Total Cost", f"€{total_cost:.2f}")
+        k4.metric("Period SCOP", f"{scop:.2f}")
 
-        # Message about missing hydraulics / heat
-        if not has_heat_energy:
-            st.warning(
-                "Flow sensor and direct Heat output are not available.\n\n"
-                "Running in **Power & Temps only** mode – energy output and COP charts are disabled.\n\n"
-                "To enable them, either map a **Flow Rate** sensor or a **Heat Output** sensor in the configuration."
-            )
+        # 2. Daily Energy (Stacked)
+        st.subheader("Daily Energy Balance")
 
-        # --- CHART 1: DAILY ENERGY (Stacked) ---
+        has_heat_energy = (
+            ("Heat_Heating_kWh" in daily_df.columns)
+            or ("Heat_DHW_kWh" in daily_df.columns)
+        )
+
         if has_heat_energy:
             fig = go.Figure()
 
-            heat_hover = "<b>Heat Output</b><br>Space Heat: %{y:.1f} kWh<extra></extra>"
-            dhw_hover = "<b>Heat Output</b><br>DHW Heat: %{y:.1f} kWh<extra></extra>"
-            elec_hover = "<b>Electricity Input</b><br>Space Elec: %{y:.1f} kWh<extra></extra>"
-            dhw_elec_hover = "<b>Electricity Input</b><br>DHW Elec: %{y:.1f} kWh<extra></extra>"
-            immersion_hover = "<b>Electricity Input</b><br>Immersion: %{y:.1f} kWh<extra></extra>"
+            # Hover templates (1 decimal place for kWh)
+            heat_hover = "Heat Output<br>Space Heat: %{y:.1f} kWh"
+            dhw_hover = "Heat Output<br>DHW Heat: %{y:.1f} kWh"
+            elec_hover = "Electricity Input<br>Space Elec: %{y:.1f} kWh"
+            dhw_elec_hover = "Electricity Input<br>DHW Elec: %{y:.1f} kWh"
+            immersion_hover = "Electricity Input<br>Immersion: %{y:.1f} kWh"
 
-            if 'Heat_Heating_kWh' in daily_df.columns:
-                fig.add_trace(go.Bar(
-                    x=daily_df.index,
-                    y=daily_df['Heat_Heating_kWh'].fillna(0),
-                    name='Space Heat',
-                    marker_color='#ffa600',
-                    offsetgroup=0,
-                    legendgroup='Output',
-                    hovertemplate=heat_hover
-                ))
+            # Left stack: Heat Output
+            if "Heat_Heating_kWh" in daily_df.columns:
+                fig.add_trace(
+                    go.Bar(
+                        x=daily_df.index,
+                        y=daily_df["Heat_Heating_kWh"].fillna(0),
+                        name="Space Heat",
+                        marker_color="#ffa600",
+                        offsetgroup=0,
+                        legendgroup="Output",
+                        hovertemplate=heat_hover,
+                    )
+                )
 
-            if 'Heat_DHW_kWh' in daily_df.columns:
-                base_heat = daily_df.get('Heat_Heating_kWh', 0)
+            if "Heat_DHW_kWh" in daily_df.columns:
+                base_heat = daily_df.get("Heat_Heating_kWh", 0)
                 if not isinstance(base_heat, pd.Series):
                     base_heat = pd.Series(base_heat, index=daily_df.index)
-                fig.add_trace(go.Bar(
-                    x=daily_df.index,
-                    y=daily_df['Heat_DHW_kWh'].fillna(0),
-                    name='DHW Heat',
-                    marker_color='#ffd580',
-                    offsetgroup=0,
-                    base=base_heat.fillna(0),
-                    legendgroup='Output',
-                    hovertemplate=dhw_hover
-                ))
 
-            base_elec = daily_df.get('Electricity_Heating_kWh', pd.Series(0, index=daily_df.index)).fillna(0)
-            if 'Electricity_Heating_kWh' in daily_df.columns:
-                fig.add_trace(go.Bar(
-                    x=daily_df.index,
-                    y=daily_df['Electricity_Heating_kWh'].fillna(0),
-                    name='Space Elec',
-                    marker_color='#003f5c',
-                    offsetgroup=1,
-                    legendgroup='Input',
-                    hovertemplate=elec_hover
-                ))
+                fig.add_trace(
+                    go.Bar(
+                        x=daily_df.index,
+                        y=daily_df["Heat_DHW_kWh"].fillna(0),
+                        name="DHW Heat",
+                        marker_color="#ffd580",
+                        offsetgroup=0,
+                        base=base_heat.fillna(0),
+                        legendgroup="Output",
+                        hovertemplate=dhw_hover,
+                    )
+                )
 
-            if 'Electricity_DHW_kWh' in daily_df.columns:
-                fig.add_trace(go.Bar(
-                    x=daily_df.index,
-                    y=daily_df['Electricity_DHW_kWh'].fillna(0),
-                    name='DHW Elec',
-                    marker_color='#58508d',
-                    offsetgroup=1,
-                    base=base_elec,
-                    legendgroup='Input',
-                    hovertemplate=dhw_elec_hover
-                ))
-                base_elec = base_elec + daily_df['Electricity_DHW_kWh'].fillna(0)
+            # Right stack: Electricity Input
+            base_elec = daily_df.get(
+                "Electricity_Heating_kWh",
+                pd.Series(0, index=daily_df.index),
+            ).fillna(0)
 
-            if 'Immersion_kWh' in daily_df.columns:
-                fig.add_trace(go.Bar(
-                    x=daily_df.index,
-                    y=daily_df['Immersion_kWh'].fillna(0),
-                    name='Immersion',
-                    marker_color='#bc5090',
-                    offsetgroup=1,
-                    base=base_elec,
-                    legendgroup='Input',
-                    hovertemplate=immersion_hover
-                ))
+            if "Electricity_Heating_kWh" in daily_df.columns:
+                fig.add_trace(
+                    go.Bar(
+                        x=daily_df.index,
+                        y=daily_df["Electricity_Heating_kWh"].fillna(0),
+                        name="Space Elec",
+                        marker_color="#003f5c",
+                        offsetgroup=1,
+                        legendgroup="Input",
+                        hovertemplate=elec_hover,
+                    )
+                )
+
+            if "Electricity_DHW_kWh" in daily_df.columns:
+                fig.add_trace(
+                    go.Bar(
+                        x=daily_df.index,
+                        y=daily_df["Electricity_DHW_kWh"].fillna(0),
+                        name="DHW Elec",
+                        marker_color="#58508d",
+                        offsetgroup=1,
+                        base=base_elec,
+                        legendgroup="Input",
+                        hovertemplate=dhw_elec_hover,
+                    )
+                )
+                base_elec = base_elec + daily_df["Electricity_DHW_kWh"].fillna(0)
+
+            if "Immersion_kWh" in daily_df.columns:
+                fig.add_trace(
+                    go.Bar(
+                        x=daily_df.index,
+                        y=daily_df["Immersion_kWh"].fillna(0),
+                        name="Immersion",
+                        marker_color="#bc5090",
+                        offsetgroup=1,
+                        base=base_elec,
+                        legendgroup="Input",
+                        hovertemplate=immersion_hover,
+                    )
+                )
 
             fig.update_layout(
                 title="Daily Energy Balance (Stacked by Component)",
                 yaxis_title="Energy (kWh)",
-                barmode='group',
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                barmode="group",
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1,
+                ),
             )
             st.plotly_chart(fig, width="stretch", key="daily_energy_chart")
         else:
             st.info(
-                "Daily energy balance is disabled because no Heat output is available "
-                "(no Flow Rate or Heat sensor mapped)."
+                "Daily energy balance is disabled because no Heat output is "
+                "available (no Flow Rate or Heat sensor mapped)."
             )
 
-        # --- CHART 2: ENVIRONMENTAL ---
+        # 3. Environmental Charts
+        st.divider()
         c1, c2 = st.columns(2)
+
         with c1:
             fig_env = make_subplots(specs=[[{"secondary_y": True}]])
-            if 'Wind_Avg' in daily_df.columns:
-                fig_env.add_trace(go.Scatter(
-                    x=daily_df.index, y=daily_df['Wind_Avg'],
-                    name="Wind", line=dict(color='grey'),
-                    connectgaps=True,
-                    hovertemplate="Wind: %{y:.1f} m/s<extra></extra>"
-                ), secondary_y=False)
-            if 'Humidity_Avg' in daily_df.columns:
-                fig_env.add_trace(go.Scatter(
-                    x=daily_df.index, y=daily_df['Humidity_Avg'],
-                    name="Humidity", line=dict(color='blue', dash='dot'),
-                    connectgaps=True,
-                    hovertemplate="Humidity: %{y:.1f} %<extra></extra>"
-                ), secondary_y=True)
+            if "Wind_Avg" in daily_df.columns:
+                fig_env.add_trace(
+                    go.Scatter(
+                        x=daily_df.index,
+                        y=daily_df["Wind_Avg"],
+                        name="Wind",
+                        line=dict(color="grey"),
+                        connectgaps=True,
+                        hovertemplate="Wind: %{y:.1f} m/s",
+                    ),
+                    secondary_y=False,
+                )
 
-            fig_env.update_layout(title="Wind & Humidity", height=300, hovermode='x unified')
+            if "Humidity_Avg" in daily_df.columns:
+                fig_env.add_trace(
+                    go.Scatter(
+                        x=daily_df.index,
+                        y=daily_df["Humidity_Avg"],
+                        name="Humidity",
+                        line=dict(color="blue", dash="dot"),
+                        connectgaps=True,
+                        hovertemplate="Humidity: %{y:.1f} %",
+                    ),
+                    secondary_y=True,
+                )
+
+            fig_env.update_layout(
+                title="Wind & Humidity",
+                height=300,
+                hovermode="x unified",
+            )
             st.plotly_chart(fig_env, width="stretch", key="env_chart")
 
         with c2:
             fig_sol = make_subplots(specs=[[{"secondary_y": True}]])
-            if 'Solar_Avg' in daily_df.columns:
-                fig_sol.add_trace(go.Bar(
-                    x=daily_df.index, y=daily_df['Solar_Avg'], name="Solar", marker_color='orange',
-                    hovertemplate="Solar: %{y:.1f} W/m²<extra></extra>"
-                ), secondary_y=False)
+            if "Solar_Avg" in daily_df.columns:
+                fig_sol.add_trace(
+                    go.Bar(
+                        x=daily_df.index,
+                        y=daily_df["Solar_Avg"],
+                        name="Solar",
+                        marker_color="orange",
+                        hovertemplate="Solar: %{y:.1f} W/m²",
+                    ),
+                    secondary_y=False,
+                )
 
-            if has_heat_energy and 'Global_SCOP' in daily_df.columns:
-                fig_sol.add_trace(go.Scatter(
-                    x=daily_df.index, y=daily_df['Global_SCOP'], name="SCOP", line=dict(color='green'),
-                    hovertemplate="SCOP: %{y:.2f}<extra></extra>"
-                ), secondary_y=True)
-            fig_sol.update_layout(title="Solar Gain vs Efficiency", height=300, hovermode='x unified')
+            if has_heat_energy and "Global_SCOP" in daily_df.columns:
+                fig_sol.add_trace(
+                    go.Scatter(
+                        x=daily_df.index,
+                        y=daily_df["Global_SCOP"],
+                        name="SCOP",
+                        line=dict(color="green"),
+                        hovertemplate="SCOP: %{y:.2f}",
+                    ),
+                    secondary_y=True,
+                )
+
+            fig_sol.update_layout(
+                title="Solar Gain vs Efficiency",
+                height=300,
+                hovermode="x unified",
+            )
             st.plotly_chart(fig_sol, width="stretch", key="solar_chart")
 
+        # 4. Heating Weather Compensation (space heating runs)
         st.divider()
-
-        # --- CHART 3: HEATING CURVE (Space Heating Only) ---
         st.subheader("1. Space Heating Run Averages: Weather Compensation Curve")
-        st.caption("Target: Diagonal line downwards (One dot representing the average of each run).")
+        st.caption(
+            "Target: Diagonal line downwards (one dot representing the "
+            "average of each run)."
+        )
 
         heating_runs = [
-            r for r in runs_list
-            if r['run_type'] == 'Heating' and r.get('avg_flow_temp', 0) > 25
+            r
+            for r in (runs_list or [])
+            if r.get("run_type") == "Heating" and r.get("avg_flow_temp", 0) > 25
         ]
 
         if heating_runs:
             df_heat_scatter = pd.DataFrame(heating_runs)
-
             fig_wc = px.scatter(
                 df_heat_scatter,
-                x='avg_outdoor',
-                y='avg_flow_temp',
-                color='run_cop',
-                color_continuous_scale='RdYlGn',
+                x="avg_outdoor",
+                y="avg_flow_temp",
+                color="run_cop",
+                color_continuous_scale="RdYlGn",
                 title="Space Heating Run Averages: Flow Temp vs Outdoor Temp",
                 opacity=0.9,
-                labels={'avg_outdoor': 'Avg Outdoor Temp (°C)', 'avg_flow_temp': 'Avg Flow Temp (°C)', 'run_cop': 'COP'},
+                labels={
+                    "avg_outdoor": "Avg Outdoor Temp (°C)",
+                    "avg_flow_temp": "Avg Flow Temp (°C)",
+                    "run_cop": "COP",
+                },
                 hover_data={
-                    'avg_outdoor': ':.1f',
-                    'avg_flow_temp': ':.1f',
-                    'run_cop': ':.2f',
-                    'start': '|%d-%m-%Y %H:%M'
-                }
+                    "avg_outdoor": ":.1f",
+                    "avg_flow_temp": ":.1f",
+                    "run_cop": ":.2f",
+                    # Run start timestamp
+                    "start": "|%d-%m-%Y %H:%M",
+                },
             )
+
+            # Inefficient Zone (> 43°C)
             fig_wc.add_shape(
-                type="rect", x0=10, y0=43, x1=20, y1=60,
+                type="rect",
+                x0=10,
+                y0=43,
+                x1=20,
+                y1=60,
                 line=dict(color="red", width=1, dash="dot"),
-                fillcolor="rgba(0,0,0,0)", opacity=0.3, layer="below"
+                fillcolor="rgba(0,0,0,0)",
+                opacity=0.3,
+                layer="below",
             )
             fig_wc.add_annotation(
-                x=15, y=58, text="Inefficient Zone (>43°C)",
-                showarrow=False, font=dict(color="red", size=9), opacity=0.6
+                x=15,
+                y=58,
+                text="Inefficient Zone (>43°C)",
+                showarrow=False,
+                font=dict(color="red", size=9),
+                opacity=0.6,
             )
             st.plotly_chart(fig_wc, width="stretch", key="wc_heating_chart")
         else:
             st.info("No Space Heating runs detected.")
 
-        # --- CHART 4: DHW CURVE (Hot Water Only) ---
+        # 5. DHW Temperature Consistency
         st.subheader("2. Hot Water Run Averages: Temperature Consistency")
-        st.caption("Target: Flat horizontal cluster (One dot representing the average of each run).")
+        st.caption(
+            "Target: Flat horizontal cluster (one dot representing the "
+            "average of each run)."
+        )
 
         dhw_runs = [
-            r for r in runs_list
-            if r['run_type'] == 'DHW' and r.get('avg_flow_temp', 0) > 25
+            r
+            for r in (runs_list or [])
+            if r.get("run_type") == "DHW" and r.get("avg_flow_temp", 0) > 25
         ]
 
         if dhw_runs:
             df_dhw_scatter = pd.DataFrame(dhw_runs)
-
             fig_dhw = px.scatter(
                 df_dhw_scatter,
-                x='avg_outdoor',
-                y='avg_flow_temp',
-                color='run_cop',
-                color_continuous_scale='RdYlGn',
+                x="avg_outdoor",
+                y="avg_flow_temp",
+                color="run_cop",
+                color_continuous_scale="RdYlGn",
                 title="Hot Water Run Averages: Flow Temp vs Outdoor Temp",
                 opacity=0.9,
-                labels={'avg_outdoor': 'Avg Outdoor Temp (°C)', 'avg_flow_temp': 'Avg Flow Temp (°C)', 'run_cop': 'COP'},
+                labels={
+                    "avg_outdoor": "Avg Outdoor Temp (°C)",
+                    "avg_flow_temp": "Avg Flow Temp (°C)",
+                    "run_cop": "COP",
+                },
                 hover_data={
-                    'avg_outdoor': ':.1f',
-                    'avg_flow_temp': ':.1f',
-                    'run_cop': ':.2f',
-                    'start': '|%d-%m-%Y %H:%M'
-                }
+                    "avg_outdoor": ":.1f",
+                    "avg_flow_temp": ":.1f",
+                    "run_cop": ":.2f",
+                    "start": "|%d-%m-%Y %H:%M",
+                },
             )
-            fig_dhw.add_hline(y=50.0, line_dash="dot", line_color="grey", annotation_text="Typical Target (50°C)")
 
+            # Reference line at 50°C
+            fig_dhw.add_hline(
+                y=50.0,
+                line_dash="dot",
+                line_color="grey",
+                annotation_text="Typical Target (50°C)",
+            )
             st.plotly_chart(fig_dhw, width="stretch", key="wc_dhw_chart")
         else:
             st.info("No Hot Water (DHW) runs detected.")
 
-    # --- AI Report Tab Logic ---
+    # ----------------------------------------------------------------------
+    # AI REPORT TAB
+    # ----------------------------------------------------------------------
     with tab_ai:
         st.markdown("### Download AI System Context")
-        st.info("The JSON below contains all the data required for a full long-term analysis.")
+        st.info(
+            "The JSON below contains all the data required for a full "
+            "long-term analysis."
+        )
 
+        # Prepare daily_df for JSON
         json_ready = daily_df.copy().reset_index()
-        json_ready = json_ready.rename(columns={json_ready.columns[0]: 'date'})
-        json_ready['date'] = json_ready['date'].astype(str)
+        if json_ready.columns.size > 0:
+            json_ready = json_ready.rename(
+                columns={json_ready.columns[0]: "date"}
+            )
+        json_ready["date"] = json_ready["date"].astype(str)
 
         float_cols = json_ready.select_dtypes(include=[float]).columns
         json_ready[float_cols] = json_ready[float_cols].round(2)
 
         period_summary = {
             "days": int(len(json_ready)),
-            "total_heat_kwh": round(float(total_heat), 2),
-            "total_electricity_kwh": round(float(total_elec), 2),
-            "total_cost_eur": round(float(total_cost), 2),
-            "period_scop": round(float(scop), 2) if has_heat_energy else None
+            "total_heat_kwh": round(total_heat, 2),
+            "total_electricity_kwh": round(total_elec, 2),
+            "total_cost_eur": round(total_cost, 2),
+            "period_scop": round(float(scop), 2),
         }
 
         ai_payload = {
             "meta": {
                 "report_type": "LONG_TERM_TRENDS",
                 "generated_at": datetime.now(timezone.utc).isoformat(),
-                "calc_version": CALC_VERSION
+                "calc_version": CALC_VERSION,
             },
             "system_context": AI_SYSTEM_CONTEXT,
             "period_summary": period_summary,
-            "daily_metrics": json_ready.to_dict(orient='records')
+            "daily_metrics": json_ready.to_dict(orient="records"),
         }
 
         st.download_button(
-            label="Download JSON for AI Analysis",
+            label=" Download JSON for AI Analysis",
             data=json.dumps(ai_payload, indent=2),
             file_name=f"heat_pump_long_term_ai_{datetime.now().strftime('%Y%m%d')}.json",
-            mime="application/json"
+            mime="application/json",
         )
 
+        # Rendering the full JSON is slow; only do it on demand
         if st.checkbox("Show Raw JSON Payload", value=False):
             st.json(ai_payload)
-
