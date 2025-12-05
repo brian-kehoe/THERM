@@ -127,12 +127,16 @@ with st.sidebar.expander("Data source & files", expanded=in_system_setup):
             "cached",
             "uploaded_filenames",
             "capabilities",
-            "file_sources",  # NEW: clear file source mapping as well
+            "loaded_profile_signature",      # NEW: forget which profile was loaded
+            "available_sensors",             # optional: force re-scan
+            "available_sensors_files_key",   # optional: force re-scan
         ]:
             st.session_state.pop(key, None)
+
         # Force the file_uploader to re-mount with a fresh key
         st.session_state["csv_uploader_version"] += 1
         st.rerun()
+
 
 
 
@@ -295,17 +299,19 @@ if uploaded_files:
                     st.metric("Total Electricity Input", f"{total_elec:.1f} kWh")
                     st.metric("Global COP", f"{global_cop:.2f}")
 
-                # --- Configuration block ---
-                st.markdown("### Configuration")
-                profile_name = st.session_state["system_config"].get("profile_name", "Unnamed Profile")
-                st.caption(f"Profile: **{profile_name}**")
-
                 # Back to System Setup instead of Change Profile / Remap here
                 if st.button("↩ Back to System Setup"):
-                    st.session_state.pop("system_config", None)
-                    st.session_state.pop("cached", None)
-                    st.session_state.pop("capabilities", None)
+                    for key in [
+                        "system_config",
+                        "cached",
+                        "capabilities",
+                        "loaded_profile_signature",      # NEW: allow same profile to be loaded again
+                        "available_sensors",             # optional: force re-scan if files changed
+                        "available_sensors_files_key",
+                    ]:
+                        st.session_state.pop(key, None)
                     st.rerun()
+
 
                 # NOTE:
                 # In Analysis Mode screens we intentionally do NOT show
