@@ -24,14 +24,36 @@ def _scroll_to_top_if_requested() -> None:
     """
     If a previous step requested a scroll-to-top (e.g. after 'Process Uploaded Data'),
     inject a small JS snippet once and then clear the flag.
+
+    This targets the main Streamlit app container in the parent document,
+    which is the element the user actually scrolls.
     """
     if st.session_state.get("scroll_to_top"):
         st.markdown(
-            "<script>window.scrollTo(0, 0);</script>",
+            """
+            <script>
+            (function() {
+                try {
+                    // Streamlit main view container in the parent document
+                    var app = window.parent.document.querySelector('[data-testid="stAppViewContainer"]');
+                    if (app && app.scrollTo) {
+                        app.scrollTo({top: 0, behavior: 'smooth'});
+                    } else if (window.parent && window.parent.scrollTo) {
+                        // Fallback
+                        window.parent.scrollTo({top: 0, behavior: 'smooth'});
+                    }
+                } catch (e) {
+                    // Silently ignore any cross-origin or selector errors
+                    console && console.warn && console.warn("Scroll-to-top failed:", e);
+                }
+            })();
+            </script>
+            """,
             unsafe_allow_html=True,
         )
         st.session_state["scroll_to_top"] = False
 # --- end scroll helper --------------------------------------------------------
+
 
 st.set_page_config(page_title="therm v2 beta", layout="wide", page_icon="assets/therm_logo_browser_tab.png")
 
