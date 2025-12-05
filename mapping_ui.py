@@ -69,12 +69,21 @@ def render_sensor_row(label, internal_key, options, defaults, required=False, he
 def render_configuration_interface(uploaded_files):
     st.markdown("## ️ System Setup")
 
-    # Scan uploaded files once to discover available sensors/entities
-    if "available_sensors" not in st.session_state:
+    # Scan uploaded files to discover available sensors/entities.
+    # Always refresh when the set of uploaded files changes (name or size).
+    files_key = []
+    if uploaded_files:
+        files_key = sorted(
+            (getattr(f, "name", ""), getattr(f, "size", 0)) for f in uploaded_files
+        )
+
+    if (
+        "available_sensors" not in st.session_state
+        or st.session_state.get("available_sensors_files_key") != files_key
+    ):
         with st.spinner("Scanning files..."):
             st.session_state["available_sensors"] = get_all_unique_entities(uploaded_files)
-
-    options = ["None"] + st.session_state.get("available_sensors", [])
+            st.session_state["available_sensors_files_key"] = files_key
 
     col_load, col_name = st.columns([1, 2])
 
@@ -96,9 +105,9 @@ def render_configuration_interface(uploaded_files):
                 defaults.update(loaded)
 
                 # Pre-populate mapping/unit widgets
+                # (actual selectbox defaults are set later via st.session_state)
                 for k, v in defaults.get("mapping", {}).items():
-                    if v in options:
-                        st.session_state[f"map_{k}"] = v
+                    st.session_state[f"map_{k}"] = v
                 for k, v in defaults.get("units", {}).items():
                     st.session_state[f"unit_{k}"] = v
 
@@ -106,12 +115,25 @@ def render_configuration_interface(uploaded_files):
             except Exception:
                 st.error("Failed to load profile JSON.")
 
+    # Build options list:
+    #   - All entities found in the currently uploaded files
+    #   - PLUS any entities from the loaded profile mapping (even if not in this upload)
+    base_entities = st.session_state.get("available_sensors", []) or []
+    extra_from_profile = []
+    for v in (defaults.get("mapping") or {}).values():
+        if v and v not in base_entities:
+            extra_from_profile.append(v)
+
+    combined_entities = base_entities + sorted(set(extra_from_profile))
+    options = ["None"] + combined_entities
+
     # --- Profile name ---
     with col_name:
         profile_name = st.text_input("Profile Name", value=defaults["profile_name"])
 
     user_map: dict = {}
     user_units: dict = {}
+
 
     # ------------------------------------------------------------------
     # 1. Critical Sensors
