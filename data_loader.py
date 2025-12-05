@@ -75,6 +75,8 @@ def load_and_clean_data(files, user_config, progress_cb=None):
     - Resamples to 1-minute resolution (mean for numeric, ffill for state).
     - Merges numeric + state.
     - Applies simple column renaming based on user_config["mapping"].
+    - Finally, coerces all sensor-like columns to numeric, except explicit
+      textual mode columns (ValveMode, DHW_Mode).
 
     Returns:
         {
@@ -175,7 +177,6 @@ def load_and_clean_data(files, user_config, progress_cb=None):
     # 5. Apply Mapping (simple column rename)
     if progress_cb:
         progress_cb("Applying sensor mapping...", 0.8)
-
     if user_config and "mapping" in user_config:
         # Create reverse map: {Raw_ID: Friendly_Column}
         # The config has {Friendly: Raw}
@@ -185,8 +186,35 @@ def load_and_clean_data(files, user_config, progress_cb=None):
             combined_df = combined_df.rename(columns=reverse_map)
 
     # 6. Final Cleanup
+
     # Ensure index is sorted
     combined_df = combined_df.sort_index()
+
+    # --- Global numeric coercion (aligned with main branch) ----------------
+    #
+    # At this point combined_df contains:
+    #   - Numeric channels from Grafana exports ("value" path)
+    #   - State-based channels from Home Assistant history ("state" path)
+    #
+    # We want all sensor-like columns to be numeric where possible, and keep
+    # only a small, explicit set of textual mode columns as strings.
+    #
+    # This mirrors the main-branch invariant: processing.py can assume that
+    # FlowRate, Power, temperatures, etc. are numeric when doing physics and
+    # run detection.
+    TEXT_COLS = {"ValveMode", "DHW_Mode"}  # extend if you add more textual modes
+
+    for col in combined_df.columns:
+        if col in TEXT_COLS:
+            # Explicitly textual columns stay as-is
+            continue
+        try:
+            combined_df[col] = pd.to_numeric(combined_df[col], errors="coerce")
+        except Exception:
+            # If conversion fails for some weird column, leave it as-is.
+            # Downstream code should ignore non-numeric channels.
+            pass
+    # ----------------------------------------------------------------------
 
     # Fill small gaps (limited ffill to avoid masking real outages)
     combined_df = combined_df.ffill(limit=5)
