@@ -190,20 +190,20 @@ def get_processed_data(files, user_config):
         st.session_state["capabilities"] = caps
 
         status_container.update(label="Processing Complete!", state="complete", expanded=False)
-
         cache = {
             "key": combined_key,
             "df": df,
             "runs": runs,
             "daily": daily,
             "patterns": res["patterns"],
+            # NEW: keep pre-physics merged dataframe for deep debugging
+            "raw_history": res.get("raw_history"),
         }
         st.session_state["cached"] = cache
-
         st.session_state["heartbeat_baseline"] = res["baselines"]
         st.session_state["heartbeat_baseline_path"] = res.get("baseline_path")
-
         return cache
+
 
     except Exception as e:
         status_container.update(label="Processing Failed", state="error")
@@ -339,7 +339,6 @@ if uploaded_files:
                     if data is not None and "df" in data:
                         df_dbg = data["df"]
                         st.write("**Columns:**", list(df_dbg.columns))
-
                         core_cols = [
                             c
                             for c in [
@@ -359,10 +358,34 @@ if uploaded_files:
                             st.write("**Core engine columns (head):**")
                             st.dataframe(df_dbg[core_cols].head(50))
 
+                        # NEW: download full engine dataframe (post-physics, post-tariff)
+                        ts = pd.Timestamp.now().strftime("%Y-%m-%dT%H-%M")
+                        engine_csv = df_dbg.to_csv(index=True).encode("utf-8")
+                        st.download_button(
+                            "⬇ Download merged engine dataframe (CSV)",
+                            data=engine_csv,
+                            file_name=f"Data Debugger MERGED {ts}_export.csv",
+                            mime="text/csv",
+                            key="download_merged_engine_df",
+                        )
+
+                        # NEW: download pre-physics merged dataframe if available
+                        raw_history = data.get("raw_history")
+                        if isinstance(raw_history, pd.DataFrame) and not raw_history.empty:
+                            raw_csv = raw_history.to_csv(index=True).encode("utf-8")
+                            st.download_button(
+                                "⬇ Download pre-physics merged dataframe (raw_history CSV)",
+                                data=raw_csv,
+                                file_name=f"Data Debugger RAW {ts}_export.csv",
+                                mime="text/csv",
+                                key="download_raw_history_df",
+                            )
+
                     # Runs summary (also guarded)
                     if data is not None and data.get("runs"):
                         st.write(f"Detected {len(data['runs'])} runs")
                         st.write(f"Run 0 Type: {data['runs'][0]['run_type']}")
+
 
 
 
