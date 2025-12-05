@@ -122,7 +122,9 @@ def render_run_inspector(df, runs_list):
     c1.metric("Duration", f"{selected_run['duration_mins']}m")
     c2.metric("COP", f"{selected_run['run_cop']:.2f}")
     c3.metric("Avg ΔT", f"{selected_run['avg_dt']:.1f}°")
-    c4.metric("Avg Flow", f"{selected_run['avg_flow']:.1f} L/m")
+    avg_flow_lpm = selected_run.get("avg_flow_rate", 0)
+    c4.metric("Avg Flow", f"{avg_flow_lpm:.1f} L/m")
+
 
     tight_layout = dict(margin=dict(l=10, r=10, t=30, b=10), height=350)
 
@@ -499,9 +501,7 @@ def render_run_inspector(df, runs_list):
                 ),
             },
             "diagnostics_physics": {
-                "avg_flow_rate_lpm": round(
-                    selected_run.get("avg_flow", 0), 1
-                ),
+                "avg_flow_rate_lpm": round(selected_run.get("avg_flow_rate", 0), 1),
                 "avg_delta_t": round(selected_run.get("avg_dt", 0), 2),
                 "avg_flow_temp_c": round(avg_flow_temp, 1),
                 "max_flow_temp_c": round(max_flow_temp, 1),

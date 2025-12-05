@@ -11,6 +11,8 @@ import mapping_ui
 import inspector
 import data_loader
 import processing
+from utils import safe_div
+
 
 # --- FIX: Console Error Suppression ---
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="Mean of empty slice")
@@ -20,7 +22,7 @@ pd.set_option("future.no_silent_downcasting", True)
 st.set_page_config(page_title="therm v2 beta", layout="wide", page_icon="HP")
 
 # === SIDEBAR ===
-st.sidebar.image("assets/therm_logo.png", use_container_width=True)
+st.sidebar.image("assets/therm_logo.png", width="stretch")
 st.sidebar.markdown("**Thermal Health & Efficiency Reporting Module v2 beta**")
 
 # === FILE UPLOADER ===
@@ -116,33 +118,60 @@ if uploaded_files:
                 st.session_state["system_config"] = config_object
                 st.rerun()
         else:
-            # 1. Sidebar Config
+                        # 1. GET DATA (Manual Cache Check)
+            data = get_processed_data(uploaded_files, st.session_state["system_config"])
+
+            # 2. Sidebar: Analysis Mode, Global Stats, Configuration, Debugger
             with st.sidebar:
                 st.divider()
+
+                # --- Analysis Mode + Global Stats ---
+                if data and "daily" in data:
+                    st.markdown("### Analysis Mode")
+                    mode = st.radio(
+                        "Select view",
+                        ["Long-Term Trends", "Run Inspector", "Data Quality Audit"],
+                    )
+
+                    daily = data["daily"]
+                    total_heat = float(daily.get("Total_Heat_kWh", 0).sum())
+                    total_elec = float(daily.get("Total_Electricity_kWh", 0).sum())
+                    scop = safe_div(total_heat, total_elec)
+
+                    s1, s2 = st.columns(2)
+                    s1.metric("Total Heat", f"{total_heat:.0f} kWh")
+                    s2.metric("Period SCOP", f"{scop:.2f}")
+                else:
+                    mode = None
+                    st.info("Upload data and configure your system to begin analysis.")
+
+                # --- Configuration block ---
                 st.markdown("### Configuration")
-                st.caption(f"Profile: **{st.session_state['system_config'].get('profile_name')}**")
-                mapping_ui.render_config_download(st.session_state["system_config"])
-                if st.button("Change Profile / Remap"):
+                profile_name = st.session_state["system_config"].get("profile_name", "Unnamed Profile")
+                st.caption(f"Profile: **{profile_name}**")
+
+                # Back to System Setup instead of Change Profile / Remap here
+                if st.button("↩ Back to System Setup"):
                     del st.session_state["system_config"]
                     if "cached" in st.session_state:
                         del st.session_state["cached"]
                     st.rerun()
 
-            # 2. GET DATA (Manual Cache Check)
-            data = get_processed_data(uploaded_files, st.session_state["system_config"])
+                # Keep profile download in the sidebar
+                mapping_ui.render_config_download(st.session_state["system_config"])
 
-            # 3. Debugger
-            with st.sidebar.expander("Data Debugger", expanded=False):
-                st.write("**Full Config:**")
-                st.json(st.session_state["system_config"])
-                if data and "df" in data:
-                    st.write("**Columns:**", list(data["df"].columns))
-                    if data.get("runs"):
-                        st.write(f"Detected {len(data['runs'])} runs")
-                        st.write(f"Run 0 Type: {data['runs'][0]['run_type']}")
+                # --- Data Debugger at the bottom ---
+                with st.expander("Data Debugger", expanded=False):
+                    st.write("**Full Config:**")
+                    st.json(st.session_state["system_config"])
+                    if data and "df" in data:
+                        st.write("**Columns:**", list(data["df"].columns))
+                        if data.get("runs"):
+                            st.write(f"Detected {len(data['runs'])} runs")
+                            st.write(f"Run 0 Type: {data['runs'][0]['run_type']}")
 
-            # 4. Render Dashboard
-            if data:
+            # 3. Render Dashboard (main panel)
+            if data and mode:
                 caps = st.session_state.get("capabilities", {})
                 has_flowrate = caps.get("has_flowrate", True)
                 has_energy_channel = caps.get("has_energy_channel", True)
@@ -153,12 +182,7 @@ if uploaded_files:
                         "The dashboard is running in Power & Temps only mode."
                     )
 
-                mode = st.sidebar.radio(
-                    "Analysis Mode",
-                    ["Long-Term Trends", "Run Inspector", "Data Quality Audit"],
-                )
-
-                # Context injection
+                # Context injection for AI
                 st.session_state["ai_context_user"] = st.session_state["system_config"].get("ai_context", {})
 
                 if mode == "Long-Term Trends":
@@ -170,6 +194,7 @@ if uploaded_files:
                     view_quality.render_data_quality(
                         data["daily"], data["df"], [], data["patterns"], hb_path
                     )
+
 else:
     st.info("Upload CSV files to begin.")
     st.sidebar.markdown("---")

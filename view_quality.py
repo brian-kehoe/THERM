@@ -285,54 +285,90 @@ def render_data_quality(
     # TAB 4: Heartbeats
     # ------------------------------------------------------------------
     with dq_tab4:
-        st.markdown("### Sensor Heartbeat Baselines")
+        st.markdown("### ❤️ Sensor Heartbeats")
 
-        # The heartbeat baselines may come from:
-        #  - st.session_state["heartbeat_baseline"] (already loaded)
-        #  - A JSON file on disk (BASELINE_JSON_PATH / heartbeat_path)
+        # Try to load existing baseline into memory if not already
         baseline = st.session_state.get("heartbeat_baseline")
 
-        if not baseline:
-            baseline_path = (
-                heartbeat_path
-                if heartbeat_path
-                else BASELINE_JSON_PATH
-            )
+        if heartbeat_path and not baseline:
+            try:
+                baseline = baselines.load_baseline_file(heartbeat_path)
+                st.session_state["heartbeat_baseline"] = baseline
+                st.info(f"Loaded existing baseline from: {heartbeat_path}")
+            except Exception as e:
+                st.warning(f"Could not load baseline file: {e}")
+                baseline = None
 
-            if baseline_path and os.path.exists(baseline_path):
-                try:
-                    st.info(f"Loaded heartbeat baselines from: {baseline_path}")
-                    baseline = baselines.load_baseline_file(baseline_path)
-                    st.session_state["heartbeat_baseline"] = baseline
-                except Exception as e:
-                    st.error(f"Error loading baseline file: {e}")
-                    baseline = {}
+        # --- Build / Rebuild button ---
+        build_clicked = st.button("Generate / Rebuild Heartbeat Baseline")
+
+        if build_clicked:
+            # Prefer raw long history if present
+            history_df = st.session_state.get("raw_history_df")
+
+            if history_df is None or history_df.empty:
+                st.warning(
+                    "No raw history available in session. "
+                    "Using the current processed dataframe instead."
+                )
+                history_df = df
+
+            if history_df is None or history_df.empty:
+                st.error("No data available to build baselines.")
             else:
-                baseline = {}
+                with st.spinner("Building baselines..."):
+                    new_bl = baselines.build_offline_aware_seasonal_baseline(
+                        history_df, SENSOR_ROLES
+                    )
+                    st.session_state["heartbeat_baseline"] = new_bl
+                    baseline = new_bl
+                st.success("Heartbeat baseline updated in memory.")
 
-        if not baseline:
-            st.warning(
-                "No heartbeat baseline is available yet. "
-                "Run the baseline builder to generate expected sensor windows."
-            )
-        else:
-            # Show a simple table of baselines
+        if baseline:
+            # Show summary table
             rows = []
             for sensor_name, meta in baseline.items():
                 rows.append(
                     {
                         "Sensor": sensor_name,
                         "Role": meta.get("role", SENSOR_ROLES.get(sensor_name, "")),
-                        "Expected Minutes / Day": meta.get(
-                            "expected_minutes", np.nan
-                        ),
-                        "Mode": SENSOR_EXPECTATION_MODE.get(
-                            sensor_name, "system"
-                        ),
+                        "Expected Minutes / Day": meta.get("expected_minutes", None),
+                        "Mode": SENSOR_EXPECTATION_MODE.get(sensor_name, "system"),
                     }
                 )
             hb_df = pd.DataFrame(rows).sort_values("Sensor")
             st.dataframe(hb_df, width="stretch")
+
+            # Allow user to download to a location of their choice
+            import json as _json
+
+            st.download_button(
+                label="💾 Download Heartbeat Baseline (JSON)",
+                data=_json.dumps(baseline, indent=2),
+                file_name="therm_heartbeat_baseline.json",
+                mime="application/json",
+            )
+        else:
+            st.info(
+                "No heartbeat baseline loaded yet. "
+                "Click the button above to generate one."
+            )
+
+        # Optional: show the pattern analysis table if available
+        if patterns:
+            st.markdown("### Detected Sensor Patterns")
+            pat_data = []
+            for sensor, details in patterns.items():
+                pat_data.append(
+                    {
+                        "Sensor": sensor,
+                        "Type": details["report_type"],
+                        "Interval (s)": round(details["normal_interval_sec"], 1),
+                        "Gap Limit (s)": round(details["gap_threshold_sec"], 1),
+                    }
+                )
+            st.dataframe(pd.DataFrame(pat_data), width="stretch")
+
 
     # ------------------------------------------------------------------
     # TAB 5: Unmapped Data
