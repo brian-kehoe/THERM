@@ -407,6 +407,54 @@ def apply_gatekeepers(df: pd.DataFrame, user_config: dict | None = None) -> pd.D
     return d
 
 
+# --- GLOBAL STATS (CANONICAL) -----------------------------------------------
+def compute_global_stats(df: pd.DataFrame) -> dict:
+    """
+    Canonical global stats for the whole dataset, based on the processed physics engine.
+
+    - Uses `Heat` and `Power` from the fully-processed dataframe (after apply_gatekeepers),
+      so all the existing logic (immersion removal, DHW vs heating, defrost protection)
+      has already been applied.
+    - If `is_active` is present, we only count periods where the heat pump is actually running.
+      This makes the COP comparable to per-run COP.
+    - Energy is computed as W-minutes -> kWh, consistent with run and daily stats.
+
+    Returns:
+        {
+            "total_heat_kwh": float,
+            "total_elec_kwh": float,
+            "global_cop": float,
+        }
+    """
+    if df is None or df.empty:
+        return {
+            "total_heat_kwh": 0.0,
+            "total_elec_kwh": 0.0,
+            "global_cop": 0.0,
+        }
+
+    d = df.copy()
+
+    # Restrict to HP actually running if we have the engine flag
+    if "is_active" in d.columns:
+        d = d[d["is_active"] == 1]
+
+    # Normalise series
+    power = pd.to_numeric(d.get("Power", 0), errors="coerce").fillna(0.0)
+    heat = pd.to_numeric(d.get("Heat", 0), errors="coerce").fillna(0.0)
+
+    # W-minutes → kWh (60 minutes/hour * 1000 W/kW)
+    total_elec_kwh = power.sum() / 60000.0
+    total_heat_kwh = heat.sum() / 60000.0
+    global_cop = safe_div(total_heat_kwh, total_elec_kwh)
+
+    return {
+        "total_heat_kwh": float(total_heat_kwh),
+        "total_elec_kwh": float(total_elec_kwh),
+        "global_cop": float(global_cop),
+    }
+
+
 # --- RUN DETECTION -----------------------------------------------------------
 
 
