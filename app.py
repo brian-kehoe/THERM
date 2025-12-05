@@ -145,33 +145,45 @@ if uploaded_files:
             if config_object:
                 st.session_state["system_config"] = config_object
                 st.rerun()
+
         else:
-                        # 1. GET DATA (Manual Cache Check)
+            # 1. GET DATA (Manual Cache Check)
             data = get_processed_data(uploaded_files, st.session_state["system_config"])
 
-            # 2. Sidebar: Analysis Mode, Global Stats, Configuration, Debugger
+            # 2. Sidebar: Analysis Mode, Global Stats (canonical), Configuration, Debugger
             with st.sidebar:
-                st.divider()
-
-                # --- Analysis Mode + Global Stats ---
-                if data and "daily" in data:
-                    st.markdown("### Analysis Mode")
+                # --- Analysis Mode ---
+                st.markdown("### Analysis Mode")
+                if data and "df" in data:
                     mode = st.radio(
                         "Select view",
                         ["Long-Term Trends", "Run Inspector", "Data Quality Audit"],
                     )
 
-                    daily = data["daily"]
-                    total_heat = float(daily.get("Total_Heat_kWh", 0).sum())
-                    total_elec = float(daily.get("Total_Electricity_kWh", 0).sum())
-                    scop = safe_div(total_heat, total_elec)
+                    # Canonical global stats from processing engine
+                    stats = processing.compute_global_stats(data["df"])
+                    total_heat = stats["total_heat_kwh"]
+                    total_elec = stats["total_elec_kwh"]
+                    global_cop = stats["global_cop"]
 
-                    s1, s2 = st.columns(2)
-                    s1.metric("Total Heat", f"{total_heat:.0f} kWh")
-                    s2.metric("Period SCOP", f"{scop:.2f}")
+                    runs_detected = len(data.get("runs") or [])
                 else:
                     mode = None
                     st.info("Upload data and configure your system to begin analysis.")
+                    total_heat = total_elec = global_cop = 0.0
+                    runs_detected = 0
+
+                # --- Global Stats (GREEN BLOCK ONLY, shared between LT Trends + Run Inspector) ---
+                if data and mode in ("Long-Term Trends", "Run Inspector"):
+                    st.markdown("### Global Stats")
+
+                    # Runs Detected as headline
+                    st.metric("Runs Detected", f"{runs_detected}")
+
+                    # Detailed stats
+                    st.metric("Total Heat Output", f"{total_heat:.1f} kWh")
+                    st.metric("Total Electricity Input", f"{total_elec:.1f} kWh")
+                    st.metric("Global COP", f"{global_cop:.2f}")
 
                 # --- Configuration block ---
                 st.markdown("### Configuration")
@@ -180,9 +192,9 @@ if uploaded_files:
 
                 # Back to System Setup instead of Change Profile / Remap here
                 if st.button("↩ Back to System Setup"):
-                    del st.session_state["system_config"]
-                    if "cached" in st.session_state:
-                        del st.session_state["cached"]
+                    st.session_state.pop("system_config", None)
+                    st.session_state.pop("cached", None)
+                    st.session_state.pop("capabilities", None)
                     st.rerun()
 
                 # Keep profile download in the sidebar
@@ -194,9 +206,14 @@ if uploaded_files:
                     st.json(st.session_state["system_config"])
                     if data and "df" in data:
                         st.write("**Columns:**", list(data["df"].columns))
-                        if data.get("runs"):
-                            st.write(f"Detected {len(data['runs'])} runs")
-                            st.write(f"Run 0 Type: {data['runs'][0]['run_type']}")
+                    if data and data.get("runs"):
+                        st.write(f"Detected {len(data['runs'])} runs")
+                        st.write(f"Run 0 Type: {data['runs'][0]['run_type']}")
+
+
+
+
+
 
             # 3. Render Dashboard (main panel)
             if data and mode:
