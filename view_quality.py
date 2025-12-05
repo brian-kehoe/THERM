@@ -233,15 +233,57 @@ def render_data_quality(
     with dq_tab3:
         st.markdown("### Master Sensor Matrix")
 
-        # 1. Build Data
+        # --- Helper: resolve mapped / display names ---
+        config_obj = st.session_state.get("system_config", {}) or {}
+        if isinstance(config_obj, dict):
+            mapping = config_obj.get("mapping", {}) or {}
+        else:
+            mapping = {}
+
+        mapped_keys = set(mapping.keys())
+
+        # Derived / internal-only names that should NEVER appear in All Sensors
+        DERIVED_NAMES = {
+            "DeltaT", "COP_Real", "COP_Graph",
+            "Active_Zones_Count",
+            "hour", "is_night_rate", "Current_Rate",
+            "Zone_Config",
+            "Immersion_Active", "Immersion_Power",
+            "Cost_Inc",
+            "Electricity_Heating_Wmin", "Electricity_DHW_Wmin",
+            "Heat_Heating_Wmin", "Heat_DHW_Wmin",
+            "Immersion_Wh",
+        }
+
+        def sensor_is_allowed(name: str) -> bool:
+            """
+            Only include:
+            - Sensors that the user explicitly mapped in the profile
+            - AND are not in the derived/internal blacklist.
+            """
+            if not name:
+                return False
+            if name in DERIVED_NAMES:
+                return False
+            return name in mapped_keys
+
+        def display_label_for(internal_name: str) -> str:
+            """
+            What the user sees on the front end.
+
+            Requirement: show the sensor name that was mapped (the entity_id),
+            not internal placeholders like Zone_1 / Room_1 / 1,2,3 etc.
+            """
+            return str(mapping.get(internal_name, internal_name))
+
+        # 1. Build Data (counts -> availability % or raw event counts)
         count_cols = [
-            c
-            for c in daily_df.columns
+            c for c in daily_df.columns
             if c.endswith("_count") or c.endswith("_Count")
         ]
-
         if count_cols:
-            flat_data = {}
+            flat_data: dict[str, pd.Series] = {}
+
             for c in count_cols:
                 clean_name = (
                     c.replace("DQ_", "")
@@ -253,119 +295,161 @@ def render_data_quality(
                 if "short_cycle" in clean_name.lower():
                     continue
 
+                # Only keep "real" sensors that the user mapped
+                if not sensor_is_allowed(clean_name):
+                    continue
+
                 mode = SENSOR_EXPECTATION_MODE.get(clean_name, "system")
 
                 # Event-style sensors: raw count
                 if mode == "event_only":
-                    flat_data[clean_name] = (
-                        daily_df[c].fillna(0).astype(int)
-                    )
+                    flat_data[clean_name] = daily_df[c].fillna(0).astype(int)
                 else:
                     flat_data[clean_name] = availability_pct(
                         daily_df[c],
-                        expected_window_series(
-                            clean_name, system_on_minutes
-                        ),
+                        expected_window_series(clean_name, system_on_minutes),
                     ).round(0)
 
             df_flat = pd.DataFrame(flat_data, index=daily_df.index)
 
-            # 2. Re-construct Ordered Columns (Events moved to end)
-            new_columns = []       # list of (Category, Sensor)
-            valid_data_cols = []   # sensor keys already placed
-            events_cat = None
-            events_list = []
+            if df_flat.empty:
+                st.info("No mapped sensor count columns found in daily data.")
+            else:
+                # 2. Re-construct Ordered Columns (Events moved to end)
+                column_meta = []   # list of dicts: {category, internal, display}
+                valid_data_cols: list[str] = []
+                events_cat: str | None = None
+                events_list: list[str] = []
+                zones_cat_name: str | None = None
 
-            # A. Normal Groups
-            for cat_name, sensors in SENSOR_GROUPS.items():
-                if "Event" in cat_name or "Events" in cat_name:
-                    events_cat = cat_name
-                    events_list = sensors
-                    continue
+                # A. Normal Groups (except Zones + Events)
+                for cat_name, sensors in SENSOR_GROUPS.items():
+                    if "Event" in cat_name or "Events" in cat_name:
+                        events_cat = cat_name
+                        events_list = sensors
+                        continue
 
-                found_sensors = [s for s in sensors if s in df_flat.columns]
-                for s in found_sensors:
-                    new_columns.append((cat_name, s))
-                    valid_data_cols.append(s)
+                    # Option B: treat "Zones" as a generic group, not fixed names
+                    if "Zones" in cat_name or " Zone" in cat_name:
+                        zones_cat_name = cat_name
+                        continue
 
-            # B. Rooms
-            room_cols = sorted(
-                [
-                    c
-                    for c in df_flat.columns
-                    if c.startswith("Room_") and c not in valid_data_cols
-                ]
-            )
-            for r in room_cols:
-                new_columns.append(("️ Rooms", r.replace("Room_", "")))
-                valid_data_cols.append(r)
+                    found_sensors = [s for s in sensors if s in df_flat.columns]
+                    for s in found_sensors:
+                        column_meta.append(
+                            {
+                                "category": cat_name,
+                                "internal": s,
+                                "display": display_label_for(s),
+                            }
+                        )
+                        valid_data_cols.append(s)
 
-            # C. Others
-            remaining = sorted(
-                [
-                    c
-                    for c in df_flat.columns
-                    if c not in valid_data_cols
-                    and (not events_list or c not in events_list)
-                ]
-            )
-            for rem in remaining:
-                new_columns.append(("Other", rem))
-                valid_data_cols.append(rem)
+                # B. Zones (generic: any Zone_* present in df_flat)
+                if zones_cat_name:
+                    zone_cols = sorted(
+                        [
+                            c for c in df_flat.columns
+                            if c.startswith("Zone_") and c not in valid_data_cols
+                        ]
+                    )
+                    for z in zone_cols:
+                        column_meta.append(
+                            {
+                                "category": zones_cat_name,
+                                "internal": z,
+                                "display": display_label_for(z),
+                            }
+                        )
+                        valid_data_cols.append(z)
 
-            # D. Events (appended last)
-            if events_cat:
-                found_events = [
-                    s for s in events_list if s in df_flat.columns
-                ]
-                for s in found_events:
-                    new_columns.append((events_cat, s))
-                    valid_data_cols.append(s)
-
-            # 3. Build Final DataFrame
-            df_final = df_flat[valid_data_cols].copy()
-            df_final.columns = pd.MultiIndex.from_tuples(new_columns)
-            df_final = format_dq_df(df_final)
-
-            # 4. Apply Styles
-            event_cols = []
-            normal_cols = []
-
-            for col_tuple in df_final.columns:
-                sensor_name = col_tuple[1]
-                # For room sensors we stored the name without 'Room_'
-                check_name = (
-                    f"Room_{sensor_name}"
-                    if col_tuple[0] == "️ Rooms"
-                    else sensor_name
+                # C. Rooms (any Room_* not yet placed)
+                room_cols = sorted(
+                    [
+                        c for c in df_flat.columns
+                        if c.startswith("Room_") and c not in valid_data_cols
+                    ]
                 )
-                mode = SENSOR_EXPECTATION_MODE.get(check_name, "system")
+                for r in room_cols:
+                    column_meta.append(
+                        {
+                            "category": "️ Rooms",
+                            "internal": r,
+                            # Show mapped entity, not "Room_1"/"1"
+                            "display": display_label_for(r),
+                        }
+                    )
+                    valid_data_cols.append(r)
 
-                if mode == "event_only" or "defrost" in str(check_name).lower():
-                    event_cols.append(col_tuple)
-                else:
-                    normal_cols.append(col_tuple)
-
-            styler = df_final.style.format("{:.0f}", na_rep="-")
-
-            if normal_cols:
-                styler = styler.background_gradient(
-                    subset=normal_cols,
-                    cmap="RdYlGn",
-                    vmin=0,
-                    vmax=100,
+                # D. Others (still mapped, but not in any category above)
+                remaining = sorted(
+                    [
+                        c for c in df_flat.columns
+                        if c not in valid_data_cols
+                        and (not events_list or c not in events_list)
+                    ]
                 )
+                for rem in remaining:
+                    column_meta.append(
+                        {
+                            "category": "Other",
+                            "internal": rem,
+                            "display": display_label_for(rem),
+                        }
+                    )
+                    valid_data_cols.append(rem)
 
-            if event_cols:
-                # Grey background for event-style sensors
-                styler = styler.map(
-                    lambda x: "background-color: #e0e0e0; color: #555555",
-                    subset=event_cols,
+                # E. Events (appended last)
+                if events_cat:
+                    found_events = [s for s in events_list if s in df_flat.columns]
+                    for s in found_events:
+                        column_meta.append(
+                            {
+                                "category": events_cat,
+                                "internal": s,
+                                "display": display_label_for(s),
+                            }
+                        )
+                        valid_data_cols.append(s)
+
+                # 3. Build Final DataFrame
+                df_final = df_flat[valid_data_cols].copy()
+                df_final = format_dq_df(df_final)
+
+                multi_cols = pd.MultiIndex.from_tuples(
+                    [(m["category"], m["display"]) for m in column_meta]
                 )
+                df_final.columns = multi_cols
 
-            st.dataframe(styler, width="stretch")
+                # 4. Apply Styles (normal vs event-style)
+                event_cols = []
+                normal_cols = []
+                internal_names = [m["internal"] for m in column_meta]
+
+                for col_tuple, internal_name in zip(df_final.columns, internal_names):
+                    mode = SENSOR_EXPECTATION_MODE.get(internal_name, "system")
+                    if mode == "event_only" or "defrost" in internal_name.lower():
+                        event_cols.append(col_tuple)
+                    else:
+                        normal_cols.append(col_tuple)
+
+                styler = df_final.style.format("{:.0f}", na_rep="-")
+                if normal_cols:
+                    styler = styler.background_gradient(
+                        subset=normal_cols, cmap="RdYlGn", vmin=0, vmax=100,
+                    )
+                if event_cols:
+                    # Grey background for event-style sensors
+                    styler = styler.map(
+                        lambda x: "background-color: #e0e0e0; color: #555555",
+                        subset=event_cols,
+                    )
+
+                st.dataframe(styler, width="stretch")
         else:
             st.info("No count-based columns found in daily data.")
+
+
 
 
     # ------------------------------------------------------------------
