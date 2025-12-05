@@ -3,6 +3,7 @@ import warnings
 import pandas as pd
 import numpy as np
 import streamlit as st
+import traceback  # NEW: for detailed debug
 
 import view_trends
 import view_runs
@@ -176,6 +177,12 @@ def get_processed_data(files, user_config):
     except Exception as e:
         status_container.update(label="Processing Failed", state="error")
         st.error(f"An error occurred: {e}")
+
+        # NEW: Detailed traceback for debugging
+        tb = traceback.format_exc()
+        with st.expander("Debug: Full traceback", expanded=False):
+            st.code(tb)
+
         return None
 
 
@@ -187,8 +194,15 @@ if uploaded_files:
         st.dataframe(summary, width="stretch")
         for f, d in details.items():
             with st.expander(f"Details: {f}"):
-                st.write(f"Entities found: {len(d['entities_found'])}")
-                st.code("\n".join(d["entities_found"]))
+                entities = d.get("entities_found", [])
+                st.write(f"Entities found: {len(entities)}")
+                st.code("\n".join(entities))
+
+                # NEW: per-entity type / example info from inspector.py
+                entity_debug = d.get("entity_debug", [])
+                if entity_debug:
+                    st.markdown("**Entity type / example summary:**")
+                    st.code("\n".join(entity_debug))
     else:
         # --- CONFIGURATION WORKFLOW ---
         if "system_config" not in st.session_state:
