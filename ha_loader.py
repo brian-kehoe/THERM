@@ -143,7 +143,7 @@ def process_ha_files(
     # ------------------------------------------------------------------
     # 7. RESAMPLE TO 1-MINUTE
     # ------------------------------------------------------------------
-    df_wide = wide.resample("1T").ffill()
+    df_wide = wide.resample("1T").last().ffill(limit=120)
 
     # ------------------------------------------------------------------
     # 8. APPLY USER SENSOR MAPPING
