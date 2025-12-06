@@ -127,16 +127,27 @@ def _ensure_heat_and_cop(
         has_heat_data = heat_series.abs().sum() > 0
         d["Heat"] = heat_series  # normalise type
 
-    # Precompute hydraulics series regardless; safe even if missing
-    flow = pd.to_numeric(d.get("FlowRate", 0), errors="coerce").fillna(0)
-    delta_t = pd.to_numeric(d.get("DeltaT", 0), errors="coerce").fillna(0)
-    freq = pd.to_numeric(d.get("Freq", 0), errors="coerce").fillna(0)
+    # Precompute hydraulics series regardless; safe even if missing.
+    # IMPORTANT: use Series defaults aligned to the index, not scalars,
+    # so that .fillna() is always valid even when the column is absent.
+    flow = pd.to_numeric(
+        d.get("FlowRate", pd.Series(0, index=d.index)), errors="coerce"
+    ).fillna(0)
+
+    delta_t = pd.to_numeric(
+        d.get("DeltaT", pd.Series(0, index=d.index)), errors="coerce"
+    ).fillna(0)
+
+    freq = pd.to_numeric(
+        d.get("Freq", pd.Series(0, index=d.index)), errors="coerce"
+    ).fillna(0)
 
     # Thresholds
     min_flow = thresholds.get("min_flow_rate_lpm", 0)
     min_freq = thresholds.get("min_freq_for_heat", 0)
     min_dt = thresholds.get("min_valid_delta_t", 0)
     max_dt = thresholds.get("max_valid_delta_t", 999)
+
 
     if not has_heat_data:
         if has_flow:
