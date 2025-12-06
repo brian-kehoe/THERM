@@ -154,13 +154,24 @@ def inspect_raw_files(uploaded_files):
         # LONG FORMAT
         # ---------------------------------------------------------------------
         if long_format:
-
-            entity_col = next(c for c in df_raw.columns if c.lower() == "entity_id")
-            state_col  = next(c for c in df_raw.columns if c.lower() == "state")
+            # FIX: Handle both Grafana (entity_id + value) and HA (entity_id + state)
+            entity_col = next((c for c in df_raw.columns if c.lower() == "entity_id"), None)
+            
+            # Try to find value column: prefer 'state' (HA), fallback to 'value' (Grafana)
+            value_col = next((c for c in df_raw.columns if c.lower() == "state"), None)
+            if value_col is None:
+                value_col = next((c for c in df_raw.columns if c.lower() == "value"), None)
+            
+            # If we still don't have the required columns, skip this file
+            if entity_col is None or value_col is None:
+                sensor_debug[fname] = {
+                    "error": f"Long format file missing required columns. Found: {df_raw.columns.tolist()}"
+                }
+                continue
 
             for entity_name, g in df_raw.groupby(entity_col):
 
-                raw = g[state_col].astype(str)
+                raw = g[value_col].astype(str)
                 parsed, is_numeric = safe_smart_parse(raw)
 
                 non_null = parsed[parsed != "unavailable"]
