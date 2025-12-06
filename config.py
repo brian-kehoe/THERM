@@ -26,7 +26,7 @@ NIGHT_HOURS = [2, 3, 4, 5]
 # ==========================================
 # PHYSICS & HYDRAULIC CONSTANTS
 # ==========================================
-SPECIFIC_HEAT_CAPACITY = 3.9 
+SPECIFIC_HEAT_CAPACITY = 65.0  # 3.9 kJ/kg·K × 1000 / 60 s = 65 W/(L/min·°C)
 
 # Calculation Thresholds (Gatekeepers)
 PHYSICS_THRESHOLDS = {
