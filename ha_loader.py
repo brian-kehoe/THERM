@@ -2,23 +2,25 @@
 # Home Assistant → Engine-ready dataframe loader for THERM
 # Updated for public-beta-v2.8
 #
-# Changes in this version:
-#   ✔ Improved dtype inference for raw Modbus 0/1 registers
-#   ✔ After pivot/resample, interprets raw Modbus state/mode sensors:
-#         - DHW Mode (0/1/2/3)
-#         - DHW Status (0/1/360)
-#         - Defrost Status (0/2/3/6)
-#         - Immersion Mode (0/1)
-#         - 3-Way Valve Position (0/1)
-#   ✔ Adds clean boolean/label columns:
-#         DHW_Mode_Label, DHW_Mode_Is_Active
-#         DHW_Status_Is_On
-#         Defrost_Is_Active
-#         Immersion_Is_On
-#         Valve_Is_DHW, Valve_Is_Heating
+# Key behaviours:
+#   - Loads HA long-form CSV (entity_id, state, last_changed/last_updated/time)
+#   - Infers dtype per entity (binary / numeric / string)
+#   - Converts to wide, 1-minute resampled dataframe
+#   - Interprets Samsung Modbus state/mode sensors into synthetic columns
+#       * DHW_Mode_Label, DHW_Mode_Is_Active
+#       * DHW_Status_Is_On
+#       * Defrost_Is_Active
+#       * Immersion_Is_On
+#       * Valve_Is_DHW, Valve_Is_Heating, Valve_Position_Label
+#   - NEW: Interpretation can use either:
+#       * Raw Modbus entities (default), or
+#       * Optional "HA mapped" entities (template / interpreted sensors),
+#         controlled via user_config["state_mode_sources"].
+#   - Applies user mapping for core engine roles (Power, FlowTemp, etc.)
+#   - Runs engine gatekeepers, run detection, and daily stats.
 #
-# All raw values are preserved. New interpreted columns appear
-# only in the wide dataframe after pivot/resample (Option B2).
+# All raw columns from HA remain untouched. Synthetic columns are added
+# after pivot/resample and BEFORE physics, and are not renamed by mapping.
 
 
 import pandas as pd
@@ -29,31 +31,45 @@ from inspector import is_binary_sensor, safe_smart_parse
 import processing
 
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
+# ----------------------------------------------------------------------
+# CONSTANTS: default raw Modbus entity IDs for state/mode roles
+# ----------------------------------------------------------------------
+
+DEFAULT_RAW_ENTITIES = {
+    "DHW_Mode": "sensor.heat_pump_hot_water_mode",
+    "DHW_Status": "sensor.heat_pump_hot_water_status",
+    "Defrost": "sensor.heat_pump_defrost_status",
+    "Immersion": "sensor.heat_pump_immersion_heater_mode",
+    "Valve": "sensor.heat_pump_3way_valve_position",
+}
+
+
+# ----------------------------------------------------------------------
+# HELPERS: dtype inference and value conversion
+# ----------------------------------------------------------------------
 
 def _infer_dtype(series: pd.Series) -> str:
     """
     Infer dtype for a single sensor based on HA long-form 'state' series.
     Returns: "binary", "numeric", or "string".
 
-    Improvements for Modbus:
+    Improvements for Modbus / HA:
+        - Classic HA binary detection via is_binary_sensor().
         - Numeric series that contain ONLY {0, 1} are treated as binary.
     """
     values = series.dropna().astype(str)
 
-    # 1. Classic HA binary types ("on"/"off", etc.)
+    # 1. Classic HA binary semantics (on/off, true/false, etc.)
     if is_binary_sensor(values):
         return "binary"
 
-    # 2. Mostly numeric?
+    # 2. Mostly numeric? (including Modbus integers, floats)
     parsed, mostly_numeric = safe_smart_parse(values)
     if mostly_numeric:
         try:
             num = pd.to_numeric(parsed, errors="coerce").dropna()
             uniq = set(num.unique().tolist())
-            # treat pure 0/1 numeric registers as binary
+            # Treat pure 0/1 numeric registers as binary
             if uniq and uniq.issubset({0, 1}):
                 return "binary"
         except Exception:
@@ -66,7 +82,7 @@ def _infer_dtype(series: pd.Series) -> str:
 
 def _convert_value(val, dtype: str):
     """
-    Convert HA 'state' values to appropriate Python values.
+    Convert HA 'state' values to proper Python values based on inferred dtype.
     """
     if dtype == "binary":
         s = str(val).strip().lower()
@@ -79,105 +95,258 @@ def _convert_value(val, dtype: str):
             return np.nan
 
     else:
+        # string / categorical
         return val
 
 
-# ============================================================
-# MODBUS INTERPRETATION (Option B2 - applied AFTER pivot)
-# ============================================================
+# ----------------------------------------------------------------------
+# MODBUS INTERPRETATION (dual-source: raw or HA-mapped)
+# ----------------------------------------------------------------------
 
-def enrich_modbus_interpretation(df: pd.DataFrame) -> pd.DataFrame:
+def _pick_state_source(
+    df: pd.DataFrame,
+    user_config: Dict[str, Any],
+    role_key: str,
+) -> tuple[Optional[str], Optional[str]]:
     """
-    Insert interpreted columns for raw Modbus state/mode sensors.
-    This is applied AFTER pivot/resample on the wide DF.
+    Select which column to use for a given logical role (DHW_Mode, DHW_Status, etc.).
 
-    Raw Modbus entity ids expected:
-        sensor.heat_pump_hot_water_mode
-        sensor.heat_pump_hot_water_status
-        sensor.heat_pump_defrost_status
-        sensor.heat_pump_immersion_heater_mode
-        sensor.heat_pump_3way_valve_position
+    Priority:
+        1) If state_mode_sources[role_key]["source"] == "mapped" and mapped_entity_id
+           exists in df.columns → use mapped.
+        2) Else if raw_entity_id exists in df.columns → use raw.
+        3) Else → (None, None) meaning "no data available for this role".
 
-    Raw columns remain untouched.
-    New interpreted columns:
-        DHW_Mode_Label, DHW_Mode_Is_Active
-        DHW_Status_Is_On
-        Defrost_Is_Active
-        Immersion_Is_On
-        Valve_Is_DHW, Valve_Is_Heating
+    user_config["state_mode_sources"] is optional. If absent or incomplete,
+    this function defaults to raw Modbus entity IDs from DEFAULT_RAW_ENTITIES.
+    """
+    sources_cfg = user_config.get("state_mode_sources", {})
+    cfg = sources_cfg.get(role_key, {})
+
+    default_raw = DEFAULT_RAW_ENTITIES.get(role_key)
+    source_mode = cfg.get("source", "raw")  # "raw" or "mapped"
+    raw_id = cfg.get("raw_entity_id", default_raw)
+    mapped_id = cfg.get("mapped_entity_id", None)
+
+    # Prefer mapped if explicitly requested and present in df
+    if source_mode == "mapped" and mapped_id and mapped_id in df.columns:
+        return "mapped", mapped_id
+
+    # Otherwise fall back to raw if present
+    if raw_id and raw_id in df.columns:
+        return "raw", raw_id
+
+    # Nothing available
+    return None, None
+
+
+def enrich_modbus_interpretation(df: pd.DataFrame, user_config: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Insert interpreted columns for Samsung Modbus state/mode sensors (or their
+    HA-mapped equivalents) INTO THE WIDE DATAFRAME, AFTER pivot/resample.
+
+    Logical roles and their synthetic outputs:
+
+        Role "DHW_Mode":
+            - DHW_Mode_Label
+            - DHW_Mode_Is_Active
+
+        Role "DHW_Status":
+            - DHW_Status_Is_On
+            (DHW_Status_Raw is implicitly the underlying column if raw used)
+
+        Role "Defrost":
+            - Defrost_Is_Active
+
+        Role "Immersion":
+            - Immersion_Is_On
+
+        Role "Valve":
+            - Valve_Is_DHW
+            - Valve_Is_Heating
+            - Valve_Position_Label
+
+    Behaviour:
+        - If source == "raw": interpret numeric Modbus codes.
+        - If source == "mapped": trust the mapped sensor as already-interpreted
+          and derive booleans/labels with conservative logic.
+        - Raw HA columns remain untouched.
     """
 
     df = df.copy()
 
     # ------------------------------------------------------------
-    # 1. DHW Mode (register 73)
+    # 1. DHW Mode (logical role "DHW_Mode")
     # ------------------------------------------------------------
-    col = "sensor.heat_pump_hot_water_mode"
-    if col in df.columns:
-        m = df[col]
+    mode_src, mode_col = _pick_state_source(df, user_config, "DHW_Mode")
+    if mode_src and mode_col in df.columns:
+        s = df[mode_col]
 
-        mode_map = {
-            0: "Eco",
-            1: "Standard",
-            2: "Power",
-            3: "Force",  # appears on some Samsung EHS units
-        }
-
-        df["DHW_Mode_Label"] = m.map(mode_map).fillna("Unknown")
-        df["DHW_Mode_Is_Active"] = m.apply(lambda v: 0 if pd.isna(v) else int(v != 0))
-
-    # ------------------------------------------------------------
-    # 2. DHW Status (register 72)
-    # ------------------------------------------------------------
-    col = "sensor.heat_pump_hot_water_status"
-    if col in df.columns:
-        s = df[col]
-        # treat > 0 as "on", allowing values like 1 and 360
-        df["DHW_Status_Is_On"] = s.apply(lambda v: 0 if pd.isna(v) else int(v > 0))
-
-    # ------------------------------------------------------------
-    # 3. Defrost Status (register 2)
-    # ------------------------------------------------------------
-    col = "sensor.heat_pump_defrost_status"
-    if col in df.columns:
-        s = df[col]
-        # minimal boolean interpretation: nonzero = defrosting
-        df["Defrost_Is_Active"] = s.apply(lambda v: 0 if pd.isna(v) else int(v != 0))
+        if mode_src == "raw":
+            # Raw Modbus register (73): 0 Eco, 1 Standard, 2 Power, 3 Force (on some units)
+            mode_map = {
+                0: "Eco",
+                1: "Standard",
+                2: "Power",
+                3: "Force",
+            }
+            df["DHW_Mode_Label"] = s.map(mode_map).fillna("Unknown")
+            df["DHW_Mode_Is_Active"] = s.apply(
+                lambda v: 0 if pd.isna(v) else int(v != 0)
+            )
+        else:
+            # Mapped: assume s is already label/enum-like
+            # We still provide a boolean "is active" guard.
+            df["DHW_Mode_Label"] = s.astype("string")
+            df["DHW_Mode_Is_Active"] = s.apply(
+                lambda v: 0 if pd.isna(v) else int(str(v).strip().lower() not in ("0", "off", "idle", "eco-off"))
+            )
 
     # ------------------------------------------------------------
-    # 4. Immersion Heater Mode (register 85)
+    # 2. DHW Status (logical role "DHW_Status")
     # ------------------------------------------------------------
-    col = "sensor.heat_pump_immersion_heater_mode"
-    if col in df.columns:
-        s = df[col]
-        df["Immersion_Is_On"] = s.apply(lambda v: 0 if pd.isna(v) else int(v == 1))
+    status_src, status_col = _pick_state_source(df, user_config, "DHW_Status")
+    if status_src and status_col in df.columns:
+        s = df[status_col]
+
+        if status_src == "raw":
+            # Raw Modbus register (72): 0, 1, 360 etc.
+            # Treat > 0 as "on".
+            df["DHW_Status_Is_On"] = s.apply(
+                lambda v: 0 if pd.isna(v) else int(v > 0)
+            )
+            # Raw values remain in the original column; if you want an
+            # explicit alias for debugging, you can add it here:
+            # df["DHW_Status_Raw"] = s
+        else:
+            # Mapped: expect boolean/int-like or "on"/"off"
+            def _mapped_dhw_on(val):
+                if pd.isna(val):
+                    return 0
+                sval = str(val).strip().lower()
+                if sval in ("on", "true", "1", "yes", "active", "heating"):
+                    return 1
+                try:
+                    return 1 if float(sval) > 0 else 0
+                except Exception:
+                    return 0
+
+            df["DHW_Status_Is_On"] = s.apply(_mapped_dhw_on)
 
     # ------------------------------------------------------------
-    # 5. 3-way Valve Position (register 89)
+    # 3. Defrost Status (logical role "Defrost")
     # ------------------------------------------------------------
-    col = "sensor.heat_pump_3way_valve_position"
-    if col in df.columns:
-        s = df[col]
+    defrost_src, defrost_col = _pick_state_source(df, user_config, "Defrost")
+    if defrost_src and defrost_col in df.columns:
+        s = df[defrost_col]
 
-        def _valve_label(v):
-            if pd.isna(v):
-                return None
-            if v == 0:
-                return "Heating"
-            if v == 1:
-                return "DHW"
-            return f"Unknown({int(v)})"
+        if defrost_src == "raw":
+            # Raw defrost status register (2): 0 idle, non-zero various active / transitions.
+            df["Defrost_Is_Active"] = s.apply(
+                lambda v: 0 if pd.isna(v) else int(v != 0)
+            )
+        else:
+            # Mapped: assume boolean-ish values (on/off, true/false, etc.)
+            def _mapped_defrost(val):
+                if pd.isna(val):
+                    return 0
+                sval = str(val).strip().lower()
+                if sval in ("on", "true", "1", "yes", "defrost", "active"):
+                    return 1
+                try:
+                    return 1 if float(sval) > 0 else 0
+                except Exception:
+                    return 0
 
-        df["Valve_Is_DHW"] = s.apply(lambda v: 0 if pd.isna(v) else int(v == 1))
-        df["Valve_Is_Heating"] = s.apply(lambda v: 0 if pd.isna(v) else int(v == 0))
-        df["Valve_Position_Label"] = s.apply(_valve_label)
+            df["Defrost_Is_Active"] = s.apply(_mapped_defrost)
+
+    # ------------------------------------------------------------
+    # 4. Immersion Heater Mode (logical role "Immersion")
+    # ------------------------------------------------------------
+    imm_src, imm_col = _pick_state_source(df, user_config, "Immersion")
+    if imm_src and imm_col in df.columns:
+        s = df[imm_col]
+
+        if imm_src == "raw":
+            # Raw Modbus (85): 0 off, 1 on.
+            df["Immersion_Is_On"] = s.apply(
+                lambda v: 0 if pd.isna(v) else int(v == 1)
+            )
+        else:
+            # Mapped: boolean-ish
+            def _mapped_imm(val):
+                if pd.isna(val):
+                    return 0
+                sval = str(val).strip().lower()
+                if sval in ("on", "true", "1", "yes", "heating"):
+                    return 1
+                try:
+                    return 1 if float(sval) > 0 else 0
+                except Exception:
+                    return 0
+
+            df["Immersion_Is_On"] = s.apply(_mapped_imm)
+
+    # ------------------------------------------------------------
+    # 5. 3-way Valve Position (logical role "Valve")
+    # ------------------------------------------------------------
+    valve_src, valve_col = _pick_state_source(df, user_config, "Valve")
+    if valve_src and valve_col in df.columns:
+        s = df[valve_col]
+
+        if valve_src == "raw":
+            # Raw Modbus (89): 0 = heating, 1 = DHW.
+            df["Valve_Is_DHW"] = s.apply(
+                lambda v: 0 if pd.isna(v) else int(v == 1)
+            )
+            df["Valve_Is_Heating"] = s.apply(
+                lambda v: 0 if pd.isna(v) else int(v == 0)
+            )
+
+            def _raw_valve_label(v):
+                if pd.isna(v):
+                    return None
+                if v == 0:
+                    return "Heating"
+                if v == 1:
+                    return "DHW"
+                return f"Unknown({int(v)})"
+
+            df["Valve_Position_Label"] = s.apply(_raw_valve_label)
+
+        else:
+            # Mapped: we try both numeric and string possibilities.
+            def _mapped_valve_flags(val):
+                if pd.isna(val):
+                    return 0, 0, None
+                sval = str(val).strip().lower()
+                # Common label-style values
+                if sval in ("heating", "space", "rad", "rads", "space_heat"):
+                    return 0, 1, "Heating"
+                if sval in ("dhw", "hot water", "tank", "cylinder"):
+                    return 1, 0, "DHW"
+                # Numeric-ish values
+                try:
+                    fv = float(sval)
+                    if fv == 0:
+                        return 0, 1, "Heating"
+                    if fv == 1:
+                        return 1, 0, "DHW"
+                    return 0, 0, f"Unknown({fv:g})"
+                except Exception:
+                    return 0, 0, f"Unknown({sval})"
+
+            mapped = s.apply(_mapped_valve_flags)
+            df["Valve_Is_DHW"] = mapped.apply(lambda x: x[0])
+            df["Valve_Is_Heating"] = mapped.apply(lambda x: x[1])
+            df["Valve_Position_Label"] = mapped.apply(lambda x: x[2])
 
     return df
 
 
-# ============================================================
+# ----------------------------------------------------------------------
 # MAIN ENTRY POINT
-# ============================================================
+# ----------------------------------------------------------------------
 
 def process_ha_files(
     files: List[Any],
@@ -186,12 +355,21 @@ def process_ha_files(
 ) -> Optional[Dict[str, Any]]:
     """
     Load Home Assistant long-form CSV(s), convert to wide 1-minute data,
-    apply Modbus interpretation (Option B2), apply mappings, run engine.
+    apply Modbus/HA-mapped interpretation, apply user mapping, run physics,
+    detect runs, and compute daily stats.
+
+    Returns dict with:
+        df          → engine dataframe (post-physics)
+        raw_history → wide dataframe after interpretation, before physics
+        runs        → list of runs
+        daily       → daily energy table
+        patterns    → None (HA mode does not use patterns yet)
+        baselines   → None (HA mode does not use heartbeats yet)
     """
 
-    # ----------------------------------------------
-    # 1. Read CSVs into long-form structure
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 1. LOAD CSVs
+    # ------------------------------------------------------------------
     dfs = []
     total = len(files)
 
@@ -207,9 +385,10 @@ def process_ha_files(
 
     long = pd.concat(dfs, ignore_index=True)
 
-    # ----------------------------------------------
-    # 2. Validate columns
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 2. VERIFY REQUIRED COLUMNS
+    # ------------------------------------------------------------------
+    # HA files usually have: entity_id, state, last_changed
     time_cols = [c for c in ("last_changed", "last_updated", "time") if c in long.columns]
     if "entity_id" not in long.columns or "state" not in long.columns or not time_cols:
         return None
@@ -218,25 +397,26 @@ def process_ha_files(
     long[ts_col] = pd.to_datetime(long[ts_col], errors="coerce")
     long = long.dropna(subset=[ts_col])
 
-    # ----------------------------------------------
-    # 3. Infer dtype per entity
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 3. INFER DTYPES PER ENTITY
+    # ------------------------------------------------------------------
     dtype_map: Dict[str, str] = {}
     for eid, grp in long.groupby("entity_id"):
         dtype_map[eid] = _infer_dtype(grp["state"])
 
-    # ----------------------------------------------
-    # 4. Convert values
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 4. CONVERT VALUES
+    # ------------------------------------------------------------------
     long["value"] = [
         _convert_value(v, dtype_map.get(eid, "string"))
         for v, eid in zip(long["state"], long["entity_id"])
     ]
 
-    # ----------------------------------------------
-    # 5. Aggregate duplicate rows
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 5. GROUP DUPLICATES → ONE VALUE PER (timestamp, entity_id)
+    # ------------------------------------------------------------------
     def _agg_group(series):
+        """Mean for numeric/binary, last valid for strings."""
         if series.dtype == object:
             return series.ffill().iloc[-1]
         else:
@@ -248,58 +428,64 @@ def process_ha_files(
         .reset_index()
     )
 
-    # ----------------------------------------------
-    # 6. Pivot to wide form
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 6. PIVOT TO WIDE
+    # ------------------------------------------------------------------
     wide = grouped.pivot(index=ts_col, columns="entity_id", values="value")
     wide.index = pd.to_datetime(wide.index)
 
-    # ----------------------------------------------
-    # 7. Resample to 1-minute
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 7. RESAMPLE TO 1-MINUTE
+    # ------------------------------------------------------------------
     df_wide = wide.resample("1T").last().ffill(limit=120)
 
-    # ----------------------------------------------
-    # 8. APPLY MODBUS INTERPRETATION (Option B2)
-    # ----------------------------------------------
-    df_wide = enrich_modbus_interpretation(df_wide)
+    # ------------------------------------------------------------------
+    # 8. APPLY MODBUS / HA-MAPPED INTERPRETATION
+    # ------------------------------------------------------------------
+    df_wide = enrich_modbus_interpretation(df_wide, user_config)
 
-    # ----------------------------------------------
-    # 9. APPLY USER MAPPING
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 9. APPLY USER SENSOR MAPPING (core engine roles)
+    # ------------------------------------------------------------------
+    # user_config["mapping"] maps THERM keys → entity_id strings
     mapping = user_config.get("mapping", {})
-    rename_dict = {}
 
+    # Reverse: entity_id → THERM key
+    rename_dict: Dict[str, str] = {}
     for therm_key, entity_id in mapping.items():
         if entity_id in df_wide.columns:
             rename_dict[entity_id] = therm_key
 
     df = df_wide.rename(columns=rename_dict)
 
-    # ----------------------------------------------
-    # 10. Calculate DeltaT if FlowTemp + ReturnTemp mapped
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 10. COMPUTE DeltaT IF MAPPED
+    # ------------------------------------------------------------------
     if "FlowTemp" in df.columns and "ReturnTemp" in df.columns:
         df["DeltaT"] = df["FlowTemp"] - df["ReturnTemp"]
 
+    # Ensure numeric types for engine core numeric columns
     numeric_cols = ["Power", "FlowTemp", "ReturnTemp", "FlowRate", "Freq", "DeltaT"]
     for c in numeric_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # ----------------------------------------------
-    # 11. Engine processing
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 11. RUN PHYSICS ENGINE
+    # ------------------------------------------------------------------
     df_engine = processing.apply_gatekeepers(df, user_config)
     if df_engine is None or df_engine.empty:
         return None
 
+    # ------------------------------------------------------------------
+    # 12. RUN DETECTOR + DAILY STATS
+    # ------------------------------------------------------------------
     runs = processing.detect_runs(df_engine, user_config)
     daily = processing.get_daily_stats(df_engine)
 
-    # ----------------------------------------------
-    # 12. Return output structure
-    # ----------------------------------------------
+    # ------------------------------------------------------------------
+    # 13. OUTPUT STRUCTURE (same as Grafana loader)
+    # ------------------------------------------------------------------
     return {
         "df": df_engine,
         "raw_history": df,   # wide dataframe after interpretation, before physics
