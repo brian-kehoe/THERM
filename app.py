@@ -400,10 +400,11 @@ if uploaded_files:
                 with st.expander("Data Debugger", expanded=False):
                     # Toggle for engine-level debug traces in processing.py
                     debug_flag = st.checkbox(
-                        "Enable engine debug traces",
-                        value=st.session_state.get("debug_engine", False),
+                        "Enable engine debug traces (JSON only)",
+                        value=st.session_state.get("debug_engine", True),  # ✅ default ON
                     )
                     st.session_state["debug_engine"] = debug_flag
+
 
                     # Only expose download bundles here (no inline debug tables / JSON)
                     if data is not None and "df" in data:
