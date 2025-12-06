@@ -5,6 +5,8 @@ import numpy as np
 import streamlit as st
 import traceback  # NEW: for detailed debug
 import json  # NEW: for app debug bundle export
+import io     # NEW: for in-memory ZIPs
+import zipfile  # NEW: for ZIP downloads
 
 import view_trends
 import view_runs
@@ -401,37 +403,23 @@ if uploaded_files:
                     # Toggle for engine-level debug traces in processing.py
                     debug_flag = st.checkbox(
                         "Enable engine debug traces (JSON only)",
-                        value=st.session_state.get("debug_engine", True),  # ✅ default ON
+                        value=st.session_state.get("debug_engine", True),  # default ON
                     )
                     st.session_state["debug_engine"] = debug_flag
-
 
                     # Only expose download bundles here (no inline debug tables / JSON)
                     if data is not None and "df" in data:
                         df_dbg = data["df"]
-                        ts = pd.Timestamp.now().strftime("%Y-%m-%dT%H-%M")
+                        ts_label = pd.Timestamp.now().strftime("%Y-%m-%dT%H-%M")
 
                         # 1) Merged engine dataframe (post-physics, post-tariff)
-                        engine_csv = df_dbg.to_csv(index=True).encode("utf-8")
-                        st.download_button(
-                            "⬇ Download merged engine dataframe (CSV)",
-                            data=engine_csv,
-                            file_name=f"Data Debugger MERGED {ts}_export.csv",
-                            mime="text/csv",
-                            key="download_merged_engine_df",
-                        )
+                        merged_csv_bytes = df_dbg.to_csv(index=True).encode("utf-8")
 
                         # 2) Pre-physics merged dataframe (raw_history) if available
                         raw_history = data.get("raw_history")
+                        raw_csv_bytes: bytes | None = None
                         if isinstance(raw_history, pd.DataFrame) and not raw_history.empty:
-                            raw_csv = raw_history.to_csv(index=True).encode("utf-8")
-                            st.download_button(
-                                "⬇ Download pre-physics merged dataframe (raw_history CSV)",
-                                data=raw_csv,
-                                file_name=f"Data Debugger RAW {ts}_export.csv",
-                                mime="text/csv",
-                                key="download_raw_history_df",
-                            )
+                            raw_csv_bytes = raw_history.to_csv(index=True).encode("utf-8")
                         else:
                             raw_history = None
 
@@ -479,7 +467,7 @@ if uploaded_files:
                                                 "count": int(len(vals)),
                                             }
 
-                        # 3) Build and expose App Debug Bundle (JSON) for LLM consumption
+                        # 3) Build and expose App Debug Bundle (JSON) + README inside ZIPs
                         try:
                             config = st.session_state.get("system_config")
                             caps = st.session_state.get("capabilities", {})
@@ -525,19 +513,88 @@ if uploaded_files:
                             }
 
                             debug_json_bytes = json.dumps(debug_bundle, default=str).encode("utf-8")
-                            st.download_button(
-                                "⬇ Download app debug bundle (JSON)",
-                                data=debug_json_bytes,
-                                file_name=f"Data Debugger DEBUG {ts}_bundle.json",
-                                mime="application/json",
-                                key="download_debug_bundle_json",
+
+                            # Single README text for all ZIPs
+                            readme_text = (
+                                "THERM Debug Export README\n"
+                                f"Version: public-beta-v2.8\n"
+                                f"Generated at: {pd.Timestamp.now(tz='UTC').isoformat()}\n\n"
+                                "Files in this archive:\n\n"
+                                "1) therm_merged_engine.csv\n"
+                                "   - Final engine dataframe after physics, flags, and tariff logic.\n"
+                                "   - One row per time step (usually 1 minute).\n"
+                                "   - Use this for detailed time-series analysis: Power, Heat, COP,\n"
+                                "     DHW vs Heating, tariffs, immersion, zone flags, etc.\n\n"
+                                "2) therm_debug_bundle.json\n"
+                                "   - Structured metadata for this analysis run.\n"
+                                "   - Includes: configuration, mapping, global statistics, run summaries,\n"
+                                "     sensor coverage, capabilities, inspector details, and internal\n"
+                                "     engine debug traces.\n"
+                                "   - Use this to understand how the app interpreted and processed the data,\n"
+                                "     not for raw time-series.\n\n"
+                                "3) therm_raw_prephysics.csv (if present)\n"
+                                "   - Pre-physics dataframe created by the loader/resampler before\n"
+                                "     gatekeepers, COP calculations, or run detection.\n"
+                                "   - Use this only when debugging data ingestion or resampling issues.\n\n"
+                                "Usage with an LLM:\n"
+                                "- Always upload therm_debug_bundle.json alongside at least\n"
+                                "  therm_merged_engine.csv.\n"
+                                "- Use therm_debug_bundle.json for structure, summary, and diagnostics.\n"
+                                "- Use therm_merged_engine.csv when you need to inspect or recompute\n"
+                                "  time-series values.\n"
+                                "- Include therm_raw_prephysics.csv only when investigating\n"
+                                "  loader/resampler problems.\n"
                             )
+                            readme_bytes = readme_text.encode("utf-8")
+
+                            # --- ZIP #1: merged CSV + debug JSON + README ---
+                            buf1 = io.BytesIO()
+                            with zipfile.ZipFile(buf1, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                                zf.writestr("therm_readme.txt", readme_bytes)
+                                zf.writestr("therm_merged_engine.csv", merged_csv_bytes)
+                                zf.writestr("therm_debug_bundle.json", debug_json_bytes)
+                            buf1.seek(0)
+
+                            st.download_button(
+                                "⬇ Download merged CSV + debug JSON (ZIP)",
+                                data=buf1,
+                                file_name=f"THERM_debug_merged_and_json_{ts_label}.zip",
+                                mime="application/zip",
+                                key="download_zip_merged_json",
+                            )
+
+                            # --- ZIP #2: all three files (if raw is available) + README ---
+                            if raw_csv_bytes is not None:
+                                buf2 = io.BytesIO()
+                                with zipfile.ZipFile(buf2, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                                    zf.writestr("therm_readme.txt", readme_bytes)
+                                    zf.writestr("therm_merged_engine.csv", merged_csv_bytes)
+                                    zf.writestr("therm_raw_prephysics.csv", raw_csv_bytes)
+                                    zf.writestr("therm_debug_bundle.json", debug_json_bytes)
+                                buf2.seek(0)
+
+                                st.download_button(
+                                    "⬇ Download all debug files (merged + raw + JSON) (ZIP)",
+                                    data=buf2,
+                                    file_name=f"THERM_debug_all_{ts_label}.zip",
+                                    mime="application/zip",
+                                    key="download_zip_all",
+                                )
+                            else:
+                                # Provide a disabled button so the UI still shows the option
+                                st.download_button(
+                                    "⬇ Download all debug files (merged + raw + JSON) (ZIP)",
+                                    data=b"",
+                                    file_name=f"THERM_debug_all_{ts_label}.zip",
+                                    mime="application/zip",
+                                    key="download_zip_all",
+                                    disabled=True,
+                                    help="Raw pre-physics dataframe not available for this run.",
+                                )
+
                         except Exception:
-                            # Debug bundle generation must never break the UI
+                            # Debug export must never break the main UI
                             pass
-
-
-
 
 
 
