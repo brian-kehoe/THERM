@@ -1,10 +1,27 @@
 # data_loader.py
+"""
+Core CSV loader for THERM.
+
+- Handles both numeric ("value") and state ("state") CSVs.
+- Normalises time to a 'Time' index.
+- Pivots to wide format (index=Time, columns=entity_id).
+- Resamples to 1-minute cadence.
+- Applies user-config mapping.
+- Provides hooks for unified Modbus interpretation across HA + Grafana paths.
+"""
+
+from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
 import streamlit as st
 
 
-# Accept a broader set of time column names, including Home Assistant history exports
+# ----------------------------------------------------------------------
+# TIME NORMALISATION
+# ----------------------------------------------------------------------
+
+# Accept a broader set of time column names, including Home Assistant history
+# exports. This list is intentionally aligned with the main branch + HA exports.
 _TIME_CANDIDATES = [
     "Time",
     "time",
@@ -19,7 +36,10 @@ _TIME_CANDIDATES = [
 ]
 
 
-def _normalise_time_column(temp: pd.DataFrame, filename: str) -> pd.DataFrame | None:
+def _normalise_time_column(
+    temp: pd.DataFrame,
+    filename: str,
+) -> Optional[pd.DataFrame]:
     """
     Ensure the dataframe has a valid 'Time' column in datetime format.
 
@@ -31,7 +51,8 @@ def _normalise_time_column(temp: pd.DataFrame, filename: str) -> pd.DataFrame | 
     Returns:
         Cleaned dataframe, or None if no usable time column is found.
     """
-    time_col = None
+    time_col: Optional[str] = None
+
     for cand in _TIME_CANDIDATES:
         if cand in temp.columns:
             time_col = cand
@@ -64,35 +85,127 @@ def _normalise_time_column(temp: pd.DataFrame, filename: str) -> pd.DataFrame | 
     return temp
 
 
-def load_and_clean_data(files, user_config, progress_cb=None):
+# ----------------------------------------------------------------------
+# MODBUS INTERPRETATION HOOK (SKELETON)
+# ----------------------------------------------------------------------
+
+def apply_modbus_interpretation(
+    df: pd.DataFrame,
+    mapping: Optional[Dict[str, Any]] = None,
+    source_hint: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Unified hook for interpreting raw Modbus registers into synthetic columns.
+
+    This is intentionally a NO-OP skeleton for now – it is safe to call in
+    existing workflows without changing behaviour.
+
+    Intended responsibilities (to implement later, mirroring ha_loader.py):
+        - Use raw Modbus integer registers (0/1, small integer enums, etc.).
+        - Derive synthetic boolean / label columns such as:
+            * DHW_Mode_Label, DHW_Mode_Is_Active
+            * DHW_Status_Is_On
+            * Defrost_Is_Active
+            * Immersion_Is_On
+            * Valve_Is_DHW, Valve_Is_Heating, Valve_Position_Label
+        - Work for both:
+            * Home Assistant history CSV exports (raw Modbus entities)
+            * Grafana/Influx exports (same entities via Influx bridge)
+        - Optionally use `mapping` and/or `source_hint` to:
+            * Disambiguate where multiple registers are present
+            * Support future dual-source architectures
+              ("raw Modbus" primary, "HA template" fallback)
+
+    Args:
+        df: Wide dataframe indexed by Time, columns = entity_id or mapped names.
+        mapping: Optional user mapping dictionary from config, if needed.
+        source_hint: Optional free-text hint ("ha_csv", "grafana_csv", etc.).
+
+    Returns:
+        DataFrame with the same index/columns for now. Future versions will
+        add synthetic columns but will avoid destructive changes.
+    """
+    # NOTE: This is currently a stub. Implementation will live here or will
+    # call a separate shared module (e.g., modbus_interpreter.py) so that
+    # HA and Grafana paths share identical decoding rules.
+    return df
+
+
+# ----------------------------------------------------------------------
+# NUMERIC COERCION
+# ----------------------------------------------------------------------
+
+def _coerce_numeric_sensors(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Coerce sensor-like columns to numeric while preserving explicit text modes.
+
+    Mirrors the main-branch invariant:
+        - FlowRate, Power, temperatures, etc. should be numeric.
+        - Only a small, explicit set of mode/label columns stay as text.
+    """
+    # Extend this set as you add more textual mode/label columns.
+    text_cols = {
+        "ValveMode",
+        "DHW_Mode",
+        # Future examples (once synthetic Modbus columns are added):
+        # "Valve_Position_Label",
+        # "DHW_Mode_Label",
+    }
+
+    for col in df.columns:
+        if col in text_cols:
+            # Explicitly textual columns stay as-is
+            continue
+        try:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        except Exception:
+            # If conversion fails for some weird column, leave it as-is.
+            # Downstream code should ignore non-numeric channels.
+            pass
+
+    return df
+
+
+# ----------------------------------------------------------------------
+# PUBLIC LOADER API
+# ----------------------------------------------------------------------
+
+def load_and_clean_data(
+    files,
+    user_config: Optional[Dict[str, Any]],
+    progress_cb: Optional[Callable[[str, float], None]] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Robust data loader that handles both Numeric (Float) and State (Text) CSV files.
 
-    - Reads each uploaded CSV.
-    - Ensures a valid 'Time' column exists (or skips the file).
-    - Splits into numeric ('value') vs state ('state') tables.
-    - Pivots to wide format: index=Time, columns=entity_id.
-    - Resamples to 1-minute resolution (mean for numeric, ffill for state).
-    - Merges numeric + state.
-    - Applies simple column renaming based on user_config["mapping"].
-    - Finally, coerces all sensor-like columns to numeric, except explicit
-      textual mode columns (ValveMode, DHW_Mode).
+    Steps:
+        1) Read each uploaded CSV and normalise the time column to 'Time'.
+        2) Split into numeric ('value') vs state ('state') tables.
+        3) Pivot each to wide format: index=Time, columns=entity_id.
+        4) Resample to 1-minute resolution:
+            - numeric: mean + short interpolation
+            - state: forward-fill (state persists until changed)
+        5) Merge numeric + state with an outer join on Time.
+        6) Apply mapping (simple column rename from config).
+        7) Apply unified Modbus interpretation hook (currently NO-OP).
+        8) Coerce sensor-like columns to numeric, preserve explicit text columns.
+        9) Fill small gaps with limited forward-fill and return the dataset.
 
     Returns:
-        {
-          "df": combined_df,
-          "raw_history": combined_df.copy(),
-          "baselines": None,
-          "patterns": None,
-        }
+        dict with keys:
+            - "df": processed wide dataframe
+            - "raw_history": copy of df (for future use)
+            - "baselines": None (placeholder)
+            - "patterns": None (placeholder)
+        or None if no usable data was found.
     """
     if not files:
         return None
 
-    numeric_dfs = []
-    state_dfs = []
+    numeric_dfs: list[pd.DataFrame] = []
+    state_dfs: list[pd.DataFrame] = []
 
-    # 1. Read and Classify Files
+    # 1. Read and classify files
     for i, f in enumerate(files):
         try:
             # Read CSV
@@ -100,7 +213,10 @@ def load_and_clean_data(files, user_config, progress_cb=None):
             temp = pd.read_csv(f)
 
             # Normalise / parse time column
-            temp = _normalise_time_column(temp, getattr(f, "name", "uploaded file"))
+            temp = _normalise_time_column(
+                temp,
+                getattr(f, "name", "uploaded file"),
+            )
             if temp is None:
                 # Skip files with no usable time column
                 continue
@@ -116,7 +232,6 @@ def load_and_clean_data(files, user_config, progress_cb=None):
                     f"Read {getattr(f, 'name', 'uploaded file')}",
                     (i / max(len(files), 1)) * 0.2,
                 )
-
         except Exception as e:
             st.error(f"Error reading {getattr(f, 'name', 'uploaded file')}: {e}")
 
@@ -138,7 +253,10 @@ def load_and_clean_data(files, user_config, progress_cb=None):
 
         # Resample to 1 minute, interpolating missing values
         df_numeric_wide = (
-            df_numeric_wide.resample("1min").mean().interpolate(limit=30)
+            df_numeric_wide
+            .resample("1min")
+            .mean()
+            .interpolate(limit=30)
         )
 
     # 3. Process State Data (Resample: FFill)
@@ -157,7 +275,8 @@ def load_and_clean_data(files, user_config, progress_cb=None):
             .unstack()
         )
 
-        # Resample to 1 minute, FORWARD FILLING the state (state persists until changed)
+        # Resample to 1 minute, FORWARD FILLING the state
+        # (state persists until changed)
         df_state_wide = df_state_wide.resample("1min").ffill()
 
     # 4. Merge
@@ -177,46 +296,26 @@ def load_and_clean_data(files, user_config, progress_cb=None):
     # 5. Apply Mapping (simple column rename)
     if progress_cb:
         progress_cb("Applying sensor mapping...", 0.8)
+
     if user_config and "mapping" in user_config:
-        # Create reverse map: {Raw_ID: Friendly_Column}
-        # The config has {Friendly: Raw}
+        # The config has {Friendly: Raw}; we need {Raw: Friendly}
         forward_map = user_config.get("mapping", {}) or {}
         if isinstance(forward_map, dict) and forward_map:
             reverse_map = {v: k for k, v in forward_map.items()}
             combined_df = combined_df.rename(columns=reverse_map)
 
-    # 6. Final Cleanup
+    # 5b. Apply unified Modbus interpretation hook (currently NO-OP)
+    # NOTE: When implementing, we may want to pass an explicit source_hint
+    # such as "grafana_csv" vs "ha_csv" depending on upstream caller.
+    combined_df = apply_modbus_interpretation(
+        combined_df,
+        mapping=user_config.get("mapping") if user_config else None,
+        source_hint=None,
+    )
 
-    # Ensure index is sorted
+    # 6. Final cleanup & small-gap filling
     combined_df = combined_df.sort_index()
-
-    # --- Global numeric coercion (aligned with main branch) ----------------
-    #
-    # At this point combined_df contains:
-    #   - Numeric channels from Grafana exports ("value" path)
-    #   - State-based channels from Home Assistant history ("state" path)
-    #
-    # We want all sensor-like columns to be numeric where possible, and keep
-    # only a small, explicit set of textual mode columns as strings.
-    #
-    # This mirrors the main-branch invariant: processing.py can assume that
-    # FlowRate, Power, temperatures, etc. are numeric when doing physics and
-    # run detection.
-    TEXT_COLS = {"ValveMode", "DHW_Mode"}  # extend if you add more textual modes
-
-    for col in combined_df.columns:
-        if col in TEXT_COLS:
-            # Explicitly textual columns stay as-is
-            continue
-        try:
-            combined_df[col] = pd.to_numeric(combined_df[col], errors="coerce")
-        except Exception:
-            # If conversion fails for some weird column, leave it as-is.
-            # Downstream code should ignore non-numeric channels.
-            pass
-    # ----------------------------------------------------------------------
-
-    # Fill small gaps (limited ffill to avoid masking real outages)
+    combined_df = _coerce_numeric_sensors(combined_df)
     combined_df = combined_df.ffill(limit=60)
 
     return {
