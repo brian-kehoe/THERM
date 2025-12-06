@@ -24,6 +24,34 @@ THRESHOLDS = {
 NIGHT_HOURS = [2, 3, 4, 5]
 
 # ==========================================
+# ENGINE STATE / ACTIVITY THRESHOLDS
+# ==========================================
+
+ENGINE_STATE_THRESHOLDS = {
+    # Frequency-based detection (primary when available)
+    "freq_on_hz": 10.0,
+    "freq_off_hz": 5.0,   # optional if you later add hysteresis
+
+    # Flow-based detection (fallback if no freq/power)
+    "flow_on_lpm": 2.0,
+    "flow_off_lpm": 1.0,
+
+    # Temperature-based detection
+    "delta_on_C": 1.0,          # minimum ΔT to count as active heating
+    "delta_coast_min_C": 0.5,   # minimum ΔT for coast-down
+
+    # Optional: Power-based detection (when available)
+    "power_on_W": 300.0,
+
+    # Coast-down lookback window (minutes)
+    "coast_down_window_min": 5,
+
+    # Minimum run duration (filter out noise runs)
+    "minimum_run_duration_min": 5,
+}
+
+
+# ==========================================
 # PHYSICS & HYDRAULIC CONSTANTS
 # ==========================================
 SPECIFIC_HEAT_CAPACITY = 65.0  # 3.9 kJ/kg·K × 1000 / 60 s = 65 W/(L/min·°C)
