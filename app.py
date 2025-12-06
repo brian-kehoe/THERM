@@ -292,6 +292,83 @@ def get_processed_data(files, user_config):
 
         return None
 
+def _build_engine_debug_traces(df: pd.DataFrame, max_rows: int = 50) -> list[dict]:
+    """
+    Build a compact set of 'interesting' engine rows for JSON debug traces.
+
+    Heuristics:
+    - COP_Real < 0 or > 7
+    - Heat < 0
+    - is_heating and is_DHW both True
+    Falls back to the last `max_rows` rows if nothing matches.
+    """
+    if df is None or df.empty:
+        return []
+
+    # Candidate columns – we keep whichever are present
+    candidate_cols = [
+        "Heat", "Heat_Heating", "Heat_DHW",
+        "Power", "Power_Heating", "Power_DHW",
+        "FlowTemp", "ReturnTemp", "DeltaT", "FlowRate",
+        "ValveMode", "DHW_Mode",
+        "is_heating", "is_DHW", "is_active",
+        "COP_Real", "COP_Graph",
+    ]
+    cols = [c for c in candidate_cols if c in df.columns]
+
+    if not cols:
+        return []
+
+    # Build masks for "interesting" rows
+    idx = df.index
+    cop = pd.to_numeric(df.get("COP_Real", pd.Series(index=idx)), errors="coerce")
+    heat = pd.to_numeric(df.get("Heat", pd.Series(index=idx)), errors="coerce")
+
+    masks = []
+
+    if not cop.isna().all():
+        masks.append(cop < 0)
+        masks.append(cop > 7)
+
+    if not heat.isna().all():
+        masks.append(heat < 0)
+
+    if "is_heating" in df.columns and "is_DHW" in df.columns:
+        masks.append(df["is_heating"] & df["is_DHW"])
+
+    if masks:
+        mask = masks[0]
+        for m in masks[1:]:
+            mask = mask | m
+        interesting = df[mask]
+    else:
+        interesting = df
+
+    if interesting.empty:
+        interesting = df.tail(max_rows)
+    else:
+        interesting = interesting.head(max_rows)
+
+    # Serialise to a JSON-friendly list of dicts, including the index as Time_index
+    records: list[dict] = []
+    for idx, row in interesting[cols].iterrows():
+        rec: dict[str, object] = {}
+        # index as a label
+        if isinstance(idx, pd.Timestamp):
+            rec["Time_index"] = idx.isoformat()
+        else:
+            rec["Time_index"] = str(idx)
+
+        for c in cols:
+            val = row[c]
+            if isinstance(val, pd.Timestamp):
+                val = val.isoformat()
+            elif isinstance(val, (np.floating, float, int, np.integer)):
+                val = float(val)
+            rec[c] = val
+        records.append(rec)
+
+    return records
 
 
 # === MAIN LOGIC ===
@@ -493,6 +570,16 @@ if uploaded_files:
                             else:
                                 inspector_summary_payload = inspector_summary
 
+                            # Build engine debug traces only when the checkbox is enabled
+                            try:
+                                if debug_flag:
+                                    engine_traces_payload = _build_engine_debug_traces(df_dbg)
+                                else:
+                                    engine_traces_payload = []
+                            except Exception:
+                                # Never let trace building break the export
+                                engine_traces_payload = []
+
                             debug_bundle = {
                                 "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
                                 "app_version": "public-beta-v2.8",
@@ -506,11 +593,10 @@ if uploaded_files:
                                 "capabilities": caps,
                                 "inspector_summary": inspector_summary_payload,
                                 "inspector_details": inspector_details,
-                                # Per-stage engine debug traces captured by processing.py
-                                "engine_debug_traces": st.session_state.get(
-                                    "engine_debug_traces", []
-                                ),
+                                # Per-stage engine debug traces derived from the engine dataframe
+                                "engine_debug_traces": engine_traces_payload,
                             }
+
 
                             debug_json_bytes = json.dumps(debug_bundle, default=str).encode("utf-8")
 
