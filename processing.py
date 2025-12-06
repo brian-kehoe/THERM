@@ -61,9 +61,13 @@ def calculate_physics_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
 # --- DEBUG HELPERS (optional) ------------------------------------------------
 def _debug_engine_state(d: pd.DataFrame, label: str = "") -> None:
-    """
-    Lightweight debug helper to inspect the internal physics engine state.
-    Controlled by st.session_state['debug_engine']; safe to call in production.
+    """Lightweight debug helper to inspect the internal physics engine state.
+
+    Behaviour:
+    - If st.session_state['debug_engine'] is False/absent → no-op.
+    - If True → append a structured snapshot into
+      st.session_state['engine_debug_traces'].
+    - Never writes to the Streamlit UI directly.
     """
     try:
         import streamlit as st  # already imported at top, but safe
@@ -74,14 +78,26 @@ def _debug_engine_state(d: pd.DataFrame, label: str = "") -> None:
         return
 
     cols = [c for c in ["Power", "Heat", "FlowRate", "DeltaT", "Freq"] if c in d.columns]
-    summary: dict[str, float | int] = {"rows": int(len(d))}
+    summary: dict[str, float | int | float] = {"rows": int(len(d))}
     for col in cols:
         ser = pd.to_numeric(d[col], errors="coerce").fillna(0)
         summary[f"{col}_nonzero"] = int((ser != 0).sum())
         summary[f"{col}_min"] = float(ser.min())
         summary[f"{col}_max"] = float(ser.max())
-    st.write(f"🔧 Engine debug – {label}")
-    st.json(summary)
+
+    # Append into a session-level trace log instead of writing to UI
+    traces = st.session_state.get("engine_debug_traces")
+    if not isinstance(traces, list):
+        traces = []
+    traces.append(
+        {
+            "type": "engine_state",
+            "label": label,
+            "summary": summary,
+        }
+    )
+    st.session_state["engine_debug_traces"] = traces
+
 
 
 # --- HEAT + COP ENGINE -------------------------------------------------------
@@ -142,25 +158,35 @@ def _ensure_heat_and_cop(
             # No Heat sensor and no FlowRate → no energy channel
             d["Heat"] = 0.0
 
-        # Optional: debug gatekeepers
-        try:
-            import streamlit as st
-            if st.session_state.get("debug_engine", False):
-                st.write(
-                    "🔍 Heat gatekeepers",
-                    {
-                        "rows_total": int(len(d)),
-                        "rows_flow_gt0": int((flow > 0).sum()),
-                        "rows_valid": int(valid.sum()) if has_flow else 0,
-                        "min_flow_threshold": float(min_flow),
-                        "min_freq_threshold": float(min_freq),
-                        "min_dt_threshold": float(min_dt),
-                        "max_dt_threshold": float(max_dt),
-                    },
-                )
-        except Exception:
-            # Debug is best-effort only; never break the engine
-            pass
+    # Optional: debug gatekeepers (captured into engine_debug_traces)
+    try:
+        import streamlit as st
+
+        if st.session_state.get("debug_engine", False):
+            payload = {
+                "rows_total": int(len(d)),
+                "rows_flow_gt0": int((flow > 0).sum()),
+                "rows_valid": int(valid.sum()) if has_flow else 0,
+                "min_flow_threshold": float(min_flow),
+                "min_freq_threshold": float(min_freq),
+                "min_dt_threshold": float(min_dt),
+                "max_dt_threshold": float(max_dt),
+            }
+            traces = st.session_state.get("engine_debug_traces")
+            if not isinstance(traces, list):
+                traces = []
+            traces.append(
+                {
+                    "type": "heat_gatekeepers",
+                    "label": "Heat gatekeepers",
+                    "details": payload,
+                }
+            )
+            st.session_state["engine_debug_traces"] = traces
+    except Exception:
+        # Debug is best-effort only; never break the engine
+        pass
+
 
     # No heat when compressor off (applies to native or derived Heat)
     if "is_active" in d.columns:

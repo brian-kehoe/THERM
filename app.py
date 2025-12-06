@@ -405,39 +405,12 @@ if uploaded_files:
                     )
                     st.session_state["debug_engine"] = debug_flag
 
-                    # Show config only if it exists
-                    config = st.session_state.get("system_config")
-                    if config is not None:
-                        st.write("**Full Config:**")
-                        st.json(config)
-                    else:
-                        st.write("**Full Config:** (no system_config in session state yet)")
-
-                    # Show dataframe core columns if data is present
+                    # Only expose download bundles here (no inline debug tables / JSON)
                     if data is not None and "df" in data:
                         df_dbg = data["df"]
-                        st.write("**Columns:**", list(df_dbg.columns))
-                        core_cols = [
-                            c
-                            for c in [
-                                "Power",
-                                "Heat",
-                                "FlowTemp",
-                                "ReturnTemp",
-                                "FlowRate",
-                                "DeltaT",
-                                "is_active",
-                                "is_DHW",
-                                "is_heating",
-                            ]
-                            if c in df_dbg.columns
-                        ]
-                        if core_cols:
-                            st.write("**Core engine columns (head):**")
-                            st.dataframe(df_dbg[core_cols].head(50))
-
-                        # NEW: download full engine dataframe (post-physics, post-tariff)
                         ts = pd.Timestamp.now().strftime("%Y-%m-%dT%H-%M")
+
+                        # 1) Merged engine dataframe (post-physics, post-tariff)
                         engine_csv = df_dbg.to_csv(index=True).encode("utf-8")
                         st.download_button(
                             "⬇ Download merged engine dataframe (CSV)",
@@ -447,7 +420,7 @@ if uploaded_files:
                             key="download_merged_engine_df",
                         )
 
-                        # NEW: download pre-physics merged dataframe if available
+                        # 2) Pre-physics merged dataframe (raw_history) if available
                         raw_history = data.get("raw_history")
                         if isinstance(raw_history, pd.DataFrame) and not raw_history.empty:
                             raw_csv = raw_history.to_csv(index=True).encode("utf-8")
@@ -458,45 +431,45 @@ if uploaded_files:
                                 mime="text/csv",
                                 key="download_raw_history_df",
                             )
+                        else:
+                            raw_history = None
 
-                            # === NEW DIAGNOSTIC SECTION ===
-                            st.write("---")
-                            st.write("**🔍 Pre-physics Sensor Coverage Analysis:**")
-                            
-                            sensor_cols = ["Power", "FlowTemp", "ReturnTemp", "FlowRate", "Freq", "DeltaT"]
-                            coverage = {}
+                        # Build pre-physics sensor coverage + active_stats for JSON bundle only
+                        sensor_cols = ["Power", "FlowTemp", "ReturnTemp", "FlowRate", "Freq", "DeltaT"]
+                        coverage: dict[str, dict] = {}
+                        active_stats: dict[str, dict] = {}
+
+                        if isinstance(raw_history, pd.DataFrame) and not raw_history.empty:
                             total_rows = len(raw_history)
-                            
                             for col in sensor_cols:
                                 if col in raw_history.columns:
-                                    non_null = raw_history[col].notna().sum()
-                                    non_zero = (pd.to_numeric(raw_history[col], errors="coerce") != 0).sum()
+                                    series = pd.to_numeric(raw_history[col], errors="coerce")
+                                    non_null = int(series.notna().sum())
+                                    non_zero = int((series != 0).sum())
                                     coverage[col] = {
-                                        "total_rows": total_rows,
+                                        "total_rows": int(total_rows),
                                         "non_null": non_null,
-                                        "non_null_pct": f"{100*non_null/total_rows:.1f}%",
+                                        "non_null_pct": float(100 * non_null / total_rows)
+                                        if total_rows
+                                        else 0.0,
                                         "non_zero": non_zero,
-                                        "non_zero_pct": f"{100*non_zero/total_rows:.1f}%",
+                                        "non_zero_pct": float(100 * non_zero / total_rows)
+                                        if total_rows
+                                        else 0.0,
                                     }
-                            
-                            st.json(coverage)
-                            
-                            # Show sample during active period (Power > 500W)
+
+                            # Active sample stats (Power > 500W) – for JSON bundle only
                             if "Power" in raw_history.columns:
                                 power_series = pd.to_numeric(raw_history["Power"], errors="coerce")
                                 active_mask = power_series > 500
-                                
                                 if active_mask.any():
-                                    st.write("**Sample during active period (Power > 500W):**")
                                     active_sample = raw_history[active_mask].head(20)
                                     display_cols = [c for c in sensor_cols if c in active_sample.columns]
-                                    st.dataframe(active_sample[display_cols])
-                                    
-                                    # Stats summary for active period
-                                    st.write("**Active period statistics:**")
-                                    active_stats = {}
                                     for col in display_cols:
-                                        vals = pd.to_numeric(active_sample[col], errors="coerce").dropna()
+                                        vals = (
+                                            pd.to_numeric(active_sample[col], errors="coerce")
+                                            .dropna()
+                                        )
                                         if len(vals) > 0:
                                             active_stats[col] = {
                                                 "min": float(vals.min()),
@@ -504,21 +477,19 @@ if uploaded_files:
                                                 "mean": float(vals.mean()),
                                                 "count": int(len(vals)),
                                             }
-                                    st.json(active_stats)
-                                else:
-                                    st.warning("No active periods found (Power > 500W)")
-                            # === END NEW DIAGNOSTIC SECTION ===
 
-                        # Runs summary (also guarded)
-                        runs_list = data.get("runs") or []
-                        if runs_list:
-                            st.write(f"Detected {len(runs_list)} runs")
-                            st.write(f"Run 0 Type: {runs_list[0].get('run_type')}")
-
-                        # --- NEW: App Debug Bundle (JSON) ---
+                        # 3) Build and expose App Debug Bundle (JSON) for LLM consumption
                         try:
+                            config = st.session_state.get("system_config")
+                            caps = st.session_state.get("capabilities", {})
+                            runs_list = data.get("runs") or []
+                            dataset_source = st.session_state.get("dataset_source", "unknown")
+
                             # Canonical global stats for the debug bundle
-                            global_stats = processing.compute_global_stats(df_dbg)
+                            try:
+                                global_stats = processing.compute_global_stats(df_dbg)
+                            except Exception:
+                                global_stats = {}
 
                             # Mapping summary (logical role -> entity_id)
                             mapping_obj = {}
@@ -528,27 +499,28 @@ if uploaded_files:
                             # Inspector outputs, if inspector has been run this session
                             inspector_summary = st.session_state.get("inspector_summary")
                             inspector_details = st.session_state.get("inspector_details")
-
-                            # Active stats may or may not exist depending on raw_history/path taken
-                            active_stats_safe = locals().get("active_stats", {})
+                            if hasattr(inspector_summary, "to_dict"):
+                                inspector_summary_payload = inspector_summary.to_dict(orient="list")
+                            else:
+                                inspector_summary_payload = inspector_summary
 
                             debug_bundle = {
                                 "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
                                 "app_version": "public-beta-v2.8",
-                                "dataset_source": st.session_state.get("dataset_source", "unknown"),
+                                "dataset_source": dataset_source,
                                 "config": config,
                                 "mapping": mapping_obj,
                                 "global_stats": global_stats,
                                 "runs": runs_list,
                                 "sensor_coverage": coverage,
-                                "active_sample_stats": active_stats_safe,
-                                "capabilities": st.session_state.get("capabilities", {}),
-                                "inspector_summary": (
-                                    inspector_summary.to_dict(orient="list")
-                                    if hasattr(inspector_summary, "to_dict")
-                                    else inspector_summary
-                                ),
+                                "active_sample_stats": active_stats,
+                                "capabilities": caps,
+                                "inspector_summary": inspector_summary_payload,
                                 "inspector_details": inspector_details,
+                                # Per-stage engine debug traces captured by processing.py
+                                "engine_debug_traces": st.session_state.get(
+                                    "engine_debug_traces", []
+                                ),
                             }
 
                             debug_json_bytes = json.dumps(debug_bundle, default=str).encode("utf-8")
@@ -560,8 +532,9 @@ if uploaded_files:
                                 key="download_debug_bundle_json",
                             )
                         except Exception:
-                            # Fail silently – debug bundle must never break the main UI
+                            # Debug bundle generation must never break the UI
                             pass
+
 
 
 
