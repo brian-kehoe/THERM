@@ -101,57 +101,6 @@ def _debug_engine_state(d: pd.DataFrame, label: str = "") -> None:
 
 
 # --- HEAT + COP ENGINE -------------------------------------------------------
-
-def _compute_is_active_flags(d: pd.DataFrame, thresholds: dict | None = None) -> pd.Series:
-    """
-    Robust "compressor running" flag using available sensors.
-
-    Priority:
-      1) Frequency (Freq) if present
-      2) Power if present and no Freq
-      3) Flow + DeltaT only if neither Freq nor Power exists
-
-    This deliberately avoids using Flow+DeltaT when Freq or Power is available,
-    so that coast-down periods (residual warm flow after the compressor stops)
-    are *not* counted as active.
-    """
-    if thresholds is None or not isinstance(thresholds, dict):
-        thresholds = {}
-
-    idx = d.index
-
-    power = pd.to_numeric(d.get("Power", 0), errors="coerce").fillna(0.0)
-    freq = pd.to_numeric(d.get("Freq", 0), errors="coerce").fillna(0.0)
-    flow = pd.to_numeric(d.get("FlowRate", 0), errors="coerce").fillna(0.0)
-    delta_t = pd.to_numeric(d.get("DeltaT", 0), errors="coerce").fillna(0.0)
-
-    has_power = "Power" in d.columns
-    has_freq = "Freq" in d.columns
-    has_flow = "FlowRate" in d.columns
-
-    power_min = float(thresholds.get("power_min", 50.0))
-    freq_on_hz = float(thresholds.get("freq_on_hz", 7.5))
-    flow_on_lpm = float(thresholds.get("flow_on_lpm", 3.0))
-    delta_on_C = float(thresholds.get("delta_on_C", 0.5))
-
-    is_active = pd.Series(False, index=idx)
-
-    # 1) Frequency-driven activity (primary when available)
-    if has_freq:
-        is_active |= freq >= freq_on_hz
-
-    # 2) Power-driven activity (only where Freq isn't available)
-    if has_power and not has_freq:
-        is_active |= power >= power_min
-
-    # 3) Hydraulic fallback: only when neither Freq nor Power exists
-    use_hydraulic = (not has_freq) and (not has_power) and has_flow
-    if use_hydraulic:
-        is_active |= (flow >= flow_on_lpm) & (delta_t >= delta_on_C)
-
-    return is_active.astype(int)
-
-
 def _ensure_heat_and_cop(
     d: pd.DataFrame, thresholds: dict | None = None
 ) -> pd.DataFrame:
@@ -453,10 +402,8 @@ def apply_gatekeepers(df: pd.DataFrame, user_config: dict | None = None) -> pd.D
     _debug_engine_state(d, "after physics (DeltaT)")
 
     # 2. Activity
-    # Use robust "compressor running" flags based on available sensors
-    # (Freq → Power → Flow+DeltaT fallback).
-    d["is_active"] = _compute_is_active_flags(d, thresholds)
-
+    power_min = thresholds.get("power_min", 50)
+    d["is_active"] = (d["Power"] > power_min).astype(int)
 
 
     # 3. Detect DHW Mode
