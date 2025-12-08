@@ -143,8 +143,19 @@ def _coerce_numeric_sensors(df: pd.DataFrame) -> pd.DataFrame:
     """
     # Extend this set as you add more textual mode/label columns.
     text_cols = {
+        # Core textual modes
         "ValveMode",
         "DHW_Mode",
+
+        # --- CRITICAL: DHW detection inputs (must survive for apply_gatekeepers) ---
+        "DHW_Status",
+        "DHW_Status_Is_On",
+        "DHW_Active",
+
+        # --- CRITICAL: Valve state inputs ---
+        "Valve_Is_DHW",
+        "Valve_Is_Heating",
+
         # Future examples (once synthetic Modbus columns are added):
         # "Valve_Position_Label",
         # "DHW_Mode_Label",
