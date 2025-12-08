@@ -174,12 +174,61 @@ def _summarise_mapping(profile: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _ui_sanity(mode: str, df: pd.DataFrame, runs: List[Dict[str, Any]], profile: Dict[str, Any]) -> Dict[str, Any]:
+def _ui_sanity(
+    mode: str,
+    df: pd.DataFrame,
+    runs: List[Dict[str, Any]],
+    profile: Dict[str, Any],
+    daily_df: pd.DataFrame | None = None,
+) -> Dict[str, Any]:
+    """
+    Summarise what the front end cares about:
+    - total heat (kWh) over the period
+    - overall COP (SCOP-like), in line with get_daily_stats + view_trends
+    """
+    heat_kwh: float | None = None
+    cop_mean: float | None = None
+
+    # 1) Prefer daily stats (matches front-end Trends behaviour)
+    if daily_df is not None and not daily_df.empty:
+        # Try Total_Heat_kWh first
+        if "Total_Heat_KWh" in daily_df.columns:
+            heat_kwh = float(daily_df["Total_Heat_KWh"].sum())
+        elif "Total_Heat_kWh" in daily_df.columns:
+            heat_kwh = float(daily_df["Total_Heat_kWh"].sum())
+        else:
+            # Fallback: sum heating + dhw if present
+            heat_kwh = float(
+                daily_df.get("Heat_Heating_kWh", pd.Series(dtype=float)).sum()
+                + daily_df.get("Heat_DHW_kWh", pd.Series(dtype=float)).sum()
+            )
+
+        # SCOP / overall COP
+        if "Global_SCOP" in daily_df.columns:
+            cop_series = pd.to_numeric(daily_df["Global_SCOP"], errors="coerce").dropna()
+            if not cop_series.empty:
+                cop_mean = float(cop_series.mean())
+
+    # 2) Fallback: engine-level physics if daily stats missing or incomplete
+    if heat_kwh is None and "Heat_Clean" in df.columns:
+        heat_kwh = float(df["Heat_Clean"].fillna(0).sum() / 1000.0 / 60.0)
+    elif heat_kwh is None and "Heat" in df.columns:
+        heat_kwh = float(df["Heat"].fillna(0).sum() / 1000.0 / 60.0)
+
+    if cop_mean is None and "COP_Real" in df.columns:
+        cop_series = pd.to_numeric(df["COP_Real"], errors="coerce").dropna()
+        if not cop_series.empty:
+            cop_mean = float(cop_series.mean())
+    elif cop_mean is None and "COP_Graph" in df.columns:
+        cop_series = pd.to_numeric(df["COP_Graph"], errors="coerce").dropna()
+        if not cop_series.empty:
+            cop_mean = float(cop_series.mean())
+
     return {
         "mode": mode,
         "rows": len(df),
-        "heat_kwh": float(df["Heat_HA"].sum() / 1000 / 60) if "Heat_HA" in df else None,
-        "cop_mean": float(df["COP_Graph_HA"].mean()) if "COP_Graph_HA" in df else None,
+        "heat_kwh": heat_kwh,
+        "cop_mean": cop_mean,
         "runs": _summarise_runs(runs),
         "mapping": _summarise_mapping(profile),
     }
@@ -200,6 +249,7 @@ def run_ha(paths: SamplePaths) -> Tuple[Path, Path]:
 
     df = res["df"]
     runs = res["runs"]
+    daily = res.get("daily")  # produced inside ha_loader via processing.get_daily_stats
 
     ts = _utc_timestamp()
     git_meta = _git_metadata()
@@ -213,6 +263,7 @@ def run_ha(paths: SamplePaths) -> Tuple[Path, Path]:
         "shape": df.shape,
         "columns": list(df.columns),
         "runs": _summarise_runs(runs),
+        "has_daily": daily is not None,
     }
 
     _ensure_artifacts(paths.artifacts)
@@ -222,7 +273,7 @@ def run_ha(paths: SamplePaths) -> Tuple[Path, Path]:
 
     _write_debug_bundle(zip_path, df, debug_json, "ha")
 
-    ui_payload = _ui_sanity("ha", df, runs, profile)
+    ui_payload = _ui_sanity("ha", df, runs, profile, daily_df=daily)
     ui_payload["generated_at_utc"] = ts
     ui_payload["git"] = git_meta
     ui_payload["source_modules"] = source_urls
@@ -251,6 +302,7 @@ def run_grafana(paths: SamplePaths) -> Tuple[Path, Path]:
     df_raw = res["df"]
     df = processing.apply_gatekeepers(df_raw, profile)
     runs = processing.detect_runs(df, profile)
+    daily = processing.get_daily_stats(df)
 
     ts = _utc_timestamp()
     git_meta = _git_metadata()
@@ -264,6 +316,7 @@ def run_grafana(paths: SamplePaths) -> Tuple[Path, Path]:
         "shape": df.shape,
         "columns": list(df.columns),
         "runs": _summarise_runs(runs),
+        "has_daily": daily is not None,
     }
 
     _ensure_artifacts(paths.artifacts)
@@ -273,7 +326,7 @@ def run_grafana(paths: SamplePaths) -> Tuple[Path, Path]:
 
     _write_debug_bundle(zip_path, df, debug_json, "grafana")
 
-    ui_payload = _ui_sanity("grafana", df, runs, profile)
+    ui_payload = _ui_sanity("grafana", df, runs, profile, daily_df=daily)
     ui_payload["generated_at_utc"] = ts
     ui_payload["git"] = git_meta
     ui_payload["source_modules"] = source_urls
