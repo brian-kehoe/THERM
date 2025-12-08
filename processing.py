@@ -42,7 +42,15 @@ def get_friendly_name(internal_key, user_config) -> str:
         return str(internal_key)
 
     val = mapping.get(internal_key, internal_key)
-    return str(val)
+    entity_id = str(val)
+    
+    # Strip common Home Assistant prefixes for cleaner display
+    if entity_id.startswith("binary_sensor."):
+        return entity_id.replace("binary_sensor.", "", 1)
+    elif entity_id.startswith("sensor."):
+        return entity_id.replace("sensor.", "", 1)
+    
+    return entity_id
 
 
 def calculate_physics_metrics(df: pd.DataFrame) -> pd.DataFrame:
