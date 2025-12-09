@@ -9,16 +9,22 @@ Core CSV loader for THERM.
 - Applies user-config mapping.
 - Provides hooks for unified Modbus interpretation across HA + Grafana paths.
 
-HOTFIX v2.8.1: Split forward-fill limits for state vs numeric sensors
-- State sensors (zones, valves, modes): 240 minute limit
-- Numeric sensors (temps, power, flow): 60 minute limit
-- Fixes Zone_1 (underfloor pump) data loss for multi-hour activations
+v2.9: Smart heartbeat-driven forward-fill
+- Analyzes actual reporting patterns from uploaded data
+- Per-sensor forward-fill limits based on learned behavior
+- Binary state sensors (zones, valves): on-change reporting with 30+ min gaps
+- Periodic sensors (temps, power): conservative 10-20 min limits
+- Sparse sensors (weather): up to 120 min for hourly reporting
+- Falls back to v2.8.1 two-tier approach on errors
 """
 
 from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
 import streamlit as st
+
+# Smart forward-fill support
+from baselines import analyze_sensor_reporting_patterns, smart_forward_fill
 
 
 # ----------------------------------------------------------------------
@@ -378,39 +384,53 @@ def load_and_clean_data(
     )
 
     # ===================================================================
-    # 6. HOTFIX v2.8.1: Sensor-type-aware forward-fill
+    # 6. Smart heartbeat-driven forward-fill
     # ===================================================================
-    # PROBLEM: Generic ffill(limit=60) truncates multi-hour zone activations.
-    # Example: Underfloor pump runs 03:07→06:07 (180 mins) but gets clipped
-    # at 60 minutes, causing Zone_1 to show all zeros in the engine.
+    # Uses pattern analysis to determine per-sensor forward-fill limits based
+    # on actual reporting behavior. This handles:
+    # - Zone/room signals with varying heartbeats
+    # - Binary state sensors (zones, valves) that report on-change
+    # - Periodic sensors (temps, power) with conservative limits
+    # - Sparse sensors (weather) with longer allowable gaps
     #
-    # SOLUTION: Split forward-fill limits by sensor type:
-    # - State sensors (zones, valves, modes) maintain state for hours → 240 min
-    # - Numeric sensors (temps, power, flow) should be conservative → 60 min
+    # Falls back to the v2.8.1 two-tier approach if pattern analysis fails.
     # ===================================================================
-    
+
     combined_df = combined_df.sort_index()
     combined_df = _coerce_numeric_sensors(combined_df)
-    
-    # Apply sensor-type-aware forward-fill
-    if not df_state_wide.empty:
-        state_cols = [c for c in combined_df.columns if c in state_source_cols]
-        numeric_cols = [c for c in combined_df.columns if c not in state_source_cols]
-        
-        # State sensors: binary sensors can stay "on" for 3+ hours
-        if state_cols:
-            combined_df[state_cols] = combined_df[state_cols].ffill(limit=240)
-        
-        # Numeric sensors: conservative limit to avoid inventing data
-        if numeric_cols:
-            combined_df[numeric_cols] = combined_df[numeric_cols].ffill(limit=60)
-    else:
-        # Fallback: if no state CSV present, use original uniform limit
-        combined_df = combined_df.ffill(limit=60)
+
+    # Try smart forward-fill with pattern analysis
+    patterns = None
+    try:
+        # Analyze reporting patterns from the current dataset
+        patterns = analyze_sensor_reporting_patterns(combined_df, baselines=None)
+
+        # Apply smart forward-fill based on learned patterns
+        combined_df = smart_forward_fill(combined_df, patterns)
+
+    except Exception as e:
+        # Fallback to v2.8.1 two-tier approach on any error
+        st.warning(f"Smart forward-fill unavailable, using fallback: {e}")
+        patterns = None
+
+        if not df_state_wide.empty:
+            state_cols = [c for c in combined_df.columns if c in state_source_cols]
+            numeric_cols = [c for c in combined_df.columns if c not in state_source_cols]
+
+            # State sensors: binary sensors can stay "on" for 3+ hours
+            if state_cols:
+                combined_df[state_cols] = combined_df[state_cols].ffill(limit=240)
+
+            # Numeric sensors: conservative limit to avoid inventing data
+            if numeric_cols:
+                combined_df[numeric_cols] = combined_df[numeric_cols].ffill(limit=60)
+        else:
+            # Fallback: if no state CSV present, use original uniform limit
+            combined_df = combined_df.ffill(limit=60)
 
     return {
         "df": combined_df,
         "raw_history": combined_df.copy(),
         "baselines": None,
-        "patterns": None,
+        "patterns": patterns,
     }

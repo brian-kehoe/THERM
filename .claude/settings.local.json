@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git log:*)",
+      "Bash(python:*)",
+      "Bash(\".venv\\Scripts\\python.exe\" testingregression_runner.py)",
+      "Bash(\".venv\\Scripts\\python.exe\" \"testing\\regression_runner.py\")",
+      "Bash(set PYTHONPATH=.)",
+      "Bash(\".venv\\Scripts\\python.exe\" -m testing.regression_runner)",
+      "Bash(set:*)",
+      "Bash(findstr:*)"
+    ]
+  }
+}

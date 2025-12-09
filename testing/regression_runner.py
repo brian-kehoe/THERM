@@ -562,7 +562,7 @@ def run_all():
     ha_out = run_ha(paths)
     graf_out = run_grafana(paths)
 
-    print("\n=== ✅ REGRESSION COMPLETE ===")
+    print("\n=== REGRESSION COMPLETE (PASSED) ===")
     print("HA:      ", ha_out)
     print("Grafana: ", graf_out)
 
