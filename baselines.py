@@ -144,14 +144,18 @@ def smart_forward_fill(df_resampled, patterns):
             # Convert gap threshold (seconds) to minutes for ffill limit
             gap_sec = pat.get('gap_threshold_sec', 300)
             limit_minutes = int(np.ceil(gap_sec / 60.0))
-            
-            # --- LOGIC UPDATE: Hard limits for sparse vs periodic ---
+
+            # --- LOGIC UPDATE: Hard limits for sparse vs periodic vs on_change ---
             if pat.get('report_type') == 'sparse':
                 # OWM sensors can fill up to 2 hours (120 mins)
                 limit_minutes = min(limit_minutes, 120)
             elif pat.get('report_type') == 'periodic':
                 # Core sensors cap at 20 mins to avoid inventing data
                 limit_minutes = min(limit_minutes, 20)
+            elif pat.get('report_type') == 'on_change':
+                # Binary state sensors (zones, valves) can stay unchanged for hours
+                # Allow longer forward-fill (up to 4 hours / 240 mins)
+                limit_minutes = min(limit_minutes, 240)
         
         # Apply forward fill with limit
         df_filled[col] = df_filled[col].ffill(limit=limit_minutes)

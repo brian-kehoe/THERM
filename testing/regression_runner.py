@@ -78,6 +78,22 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
 
 
+def _sanitize_branch_name(branch: str | None) -> str:
+    """
+    Sanitize branch name for use in filenames.
+    Replace slashes and special characters with underscores.
+    """
+    if not branch:
+        return "unknown-branch"
+
+    # Replace characters that aren't safe in filenames
+    safe = branch.replace("/", "_").replace("\\", "_").replace(":", "_")
+    safe = safe.replace(" ", "_").replace("*", "_").replace("?", "_")
+    safe = safe.replace("<", "_").replace(">", "_").replace("|", "_")
+
+    return safe
+
+
 def _git_metadata() -> Dict[str, Any]:
     try:
         branch = subprocess.check_output(
@@ -472,6 +488,7 @@ def run_ha(paths: SamplePaths) -> Tuple[Path, Path]:
     ts = _utc_timestamp()
     git_meta = _git_metadata()
     source_urls = _source_module_urls(git_meta.get("commit"))
+    branch_safe = _sanitize_branch_name(git_meta.get("branch"))
 
     debug_json = {
         "mode": "ha",
@@ -486,8 +503,8 @@ def run_ha(paths: SamplePaths) -> Tuple[Path, Path]:
 
     _ensure_artifacts(paths.artifacts)
 
-    zip_path = paths.artifacts / f"ha_debug_bundle_{ts}.zip"
-    json_path = paths.artifacts / f"ha_ui_sanity_{ts}.json"
+    zip_path = paths.artifacts / f"ha_debug_bundle_{branch_safe}_{ts}.zip"
+    json_path = paths.artifacts / f"ha_ui_sanity_{branch_safe}_{ts}.json"
 
     _write_debug_bundle(zip_path, df, debug_json, "ha")
 
@@ -522,6 +539,7 @@ def run_grafana(paths: SamplePaths) -> Tuple[Path, Path]:
     ts = _utc_timestamp()
     git_meta = _git_metadata()
     source_urls = _source_module_urls(git_meta.get("commit"))
+    branch_safe = _sanitize_branch_name(git_meta.get("branch"))
 
     debug_json = {
         "mode": "grafana",
@@ -536,8 +554,8 @@ def run_grafana(paths: SamplePaths) -> Tuple[Path, Path]:
 
     _ensure_artifacts(paths.artifacts)
 
-    zip_path = paths.artifacts / f"grafana_debug_bundle_{ts}.zip"
-    json_path = paths.artifacts / f"grafana_ui_sanity_{ts}.json"
+    zip_path = paths.artifacts / f"grafana_debug_bundle_{branch_safe}_{ts}.zip"
+    json_path = paths.artifacts / f"grafana_ui_sanity_{branch_safe}_{ts}.json"
 
     _write_debug_bundle(zip_path, df, debug_json, "grafana")
 
