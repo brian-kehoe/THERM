@@ -265,6 +265,9 @@ def render_configuration_interface(uploaded_files):
         if profile_loaded and loaded_profile_name:
             st.success(f"Loaded {loaded_profile_name}")
 
+    # Reserve a top action bar so buttons render near the top of the form
+    action_bar_top = st.container()
+
     user_map: dict = {}
     user_units: dict = {}
 
@@ -421,9 +424,6 @@ def render_configuration_interface(uploaded_files):
             help=p["help"],
         )
 
-    # Sticky action bar container near the top
-    action_bar_top = st.container()
-
     config_object = {
         "profile_name": profile_name,
         "created_at": datetime.now().isoformat(),
@@ -437,7 +437,6 @@ def render_configuration_interface(uploaded_files):
     # 6. Two-Step Actions: Save Configuration + Process Data (top bar)
     # ------------------------------------------------------------------
     with action_bar_top:
-        st.divider()
         c_btn1, c_btn2 = st.columns(2)
 
         with c_btn1:
@@ -462,8 +461,6 @@ def render_configuration_interface(uploaded_files):
                     st.session_state["scroll_to_top"] = True
                     _log(f"render_configuration_interface done secs={time.time()-t_render_start:.3f} result=config_object")
                     return config_object
-
-        st.divider()
 
     _log(f"render_configuration_interface done secs={time.time()-t_render_start:.3f} result=None")
     return None
