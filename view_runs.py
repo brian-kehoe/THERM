@@ -73,6 +73,8 @@ def render_run_inspector(df, runs_list):
     
     # Get user config from session state for friendly names
     user_config = st.session_state.get("system_config", {})
+    mapping = user_config.get("mapping", {}) if isinstance(user_config, dict) else {}
+    has_zones_mapped = any(k.startswith("Zone_") for k in mapping)
 
     total_kwh_in = safe_div(df.get("Power_Clean", df["Power"]).sum(), 1000.0) / 60.0
     total_kwh_out = safe_div(df.get("Heat_Clean", df["Heat"]).sum(), 1000.0) / 60.0
@@ -103,7 +105,14 @@ def render_run_inspector(df, runs_list):
         zone_raw = r.get("active_zones", r.get("dominant_zones", "None"))
 
         # For DHW runs, hide zone info unless heating/ghost pumping was detected.
-        show_zone = r["run_type"] != "DHW" or r.get("heating_during_dhw_detected") or r.get("ghost_pumping_power_detected")
+        show_zone = (
+            has_zones_mapped
+            and (
+                r["run_type"] != "DHW"
+                or r.get("heating_during_dhw_detected")
+                or r.get("ghost_pumping_power_detected")
+            )
+        )
         if show_zone:
             zone_label = (
                 zone_raw if zone_raw and str(zone_raw).lower() != "none" else "No Zone Data"
@@ -305,79 +314,84 @@ def render_run_inspector(df, runs_list):
 
         # ================================================================
         #   FIXED: DYNAMIC ZONE LABELS WITH USER MAPPING
+        #   Hide entirely if no zones mapped
         # ================================================================
-        # Exclude Zone_Config which is a string column for display
         zone_cols = [
             c for c in run_data.columns 
             if c.startswith("Zone_") and c != "Zone_Config"
         ]
         has_dhw = "DHW_Active" in run_data.columns
 
-        # Build friendly zone labels from user mapping
-        zone_labels = {}
-        
-        # DHW label
-        if has_dhw:
-            zone_labels["DHW_Active"] = "Hot Water"
-        
-        # Zone labels from user mapping (e.g., "binary_sensor.underfloor_pump")
-        for z in zone_cols:
-            zone_labels[z] = _get_friendly_name(z, user_config)
-
-        # Order: DHW (if present) first, then sorted zones
-        ordered_keys = []
-        if has_dhw:
-            ordered_keys.append("DHW_Active")
-        ordered_keys.extend(sorted(zone_cols))
-
-        # Add thick zone bars
-        zone_offsets = {key: idx for idx, key in enumerate(ordered_keys)}
-
-        for key in ordered_keys:
-            if key not in run_data.columns:
-                continue
-            base_y = zone_offsets[key]
+        if zone_cols:
+            # Build friendly zone labels from user mapping
+            zone_labels = {}
             
-            # Convert zone values to numeric (handles HA string values like "on"/"off")
-            def _zone_active(val):
-                """Check if zone is active, handling both numeric and string values."""
-                if pd.isna(val):
-                    return None
-                if isinstance(val, str):
-                    v = val.strip().lower()
-                    is_active = v in ("on", "true", "1", "yes", "active")
-                    return base_y + 0.8 if is_active else None
-                try:
-                    is_active = float(val) > 0
-                    return base_y + 0.8 if is_active else None
-                except:
-                    return None
+            # DHW label
+            if has_dhw:
+                zone_labels["DHW_Active"] = "Hot Water"
             
-            y_vals = run_data[key].apply(_zone_active)
-            fig2.add_trace(
-                go.Scatter(
-                    x=run_data.index,
-                    y=y_vals,
-                    name=zone_labels[key],
-                    mode="lines",
-                    line=dict(width=15),
-                    connectgaps=False,
-                ),
+            # Zone labels from user mapping (e.g., "binary_sensor.underfloor_pump")
+            for z in zone_cols:
+                zone_labels[z] = _get_friendly_name(z, user_config)
+
+            # Order: DHW (if present) first, then sorted zones
+            ordered_keys = []
+            if has_dhw:
+                ordered_keys.append("DHW_Active")
+            ordered_keys.extend(sorted(zone_cols))
+
+            # Add thick zone bars
+            zone_offsets = {key: idx for idx, key in enumerate(ordered_keys)}
+
+            for key in ordered_keys:
+                if key not in run_data.columns:
+                    continue
+                base_y = zone_offsets[key]
+                
+                # Convert zone values to numeric (handles HA string values like "on"/"off")
+                def _zone_active(val):
+                    """Check if zone is active, handling both numeric and string values."""
+                    if pd.isna(val):
+                        return None
+                    if isinstance(val, str):
+                        v = val.strip().lower()
+                        is_active = v in ("on", "true", "1", "yes", "active")
+                        return base_y + 0.8 if is_active else None
+                    try:
+                        is_active = float(val) > 0
+                        return base_y + 0.8 if is_active else None
+                    except:
+                        return None
+                
+                y_vals = run_data[key].apply(_zone_active)
+                fig2.add_trace(
+                    go.Scatter(
+                        x=run_data.index,
+                        y=y_vals,
+                        name=zone_labels[key],
+                        mode="lines",
+                        line=dict(width=15),
+                        connectgaps=False,
+                    ),
+                    row=3,
+                    col=1,
+                )
+
+            # Y-axis labels for zones
+            y_tick_vals = [zone_offsets[key] + 0.4 for key in ordered_keys]
+            y_tick_labels = [zone_labels[key] for key in ordered_keys]
+            
+            fig2.update_yaxes(
+                tickvals=y_tick_vals,
+                ticktext=y_tick_labels,
+                range=[0, len(ordered_keys)],
                 row=3,
                 col=1,
             )
-
-        # Y-axis labels for zones
-        y_tick_vals = [zone_offsets[key] + 0.4 for key in ordered_keys]
-        y_tick_labels = [zone_labels[key] for key in ordered_keys]
-        
-        fig2.update_yaxes(
-            tickvals=y_tick_vals,
-            ticktext=y_tick_labels,
-            range=[0, len(ordered_keys)],
-            row=3,
-            col=1,
-        )
+        else:
+            # If no zones mapped, hide the zones row
+            fig2.update_yaxes(visible=False, row=3, col=1)
+            fig2.update_xaxes(visible=False, row=3, col=1)
 
         # DHW / Return temps
         if is_dhw:

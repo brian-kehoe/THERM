@@ -245,9 +245,13 @@ def render_configuration_interface(uploaded_files):
                 user_map[z_key] = z_s
                 if u:
                     user_units[z_key] = z_u
+            else:
+                # If zone unmapped, clear any lingering room links in session state
+                if f"link_{z_key}" in st.session_state:
+                    st.session_state[f"link_{z_key}"] = []
 
             saved_links = defaults.get("rooms_per_zone", {}).get(z_key, [])
-            valid_defaults = [r for r in saved_links if r in room_keys_list]
+            valid_defaults = [r for r in saved_links if r in room_keys_list] if z_s != "None" else []
 
             selected_keys = st.multiselect(
                 f"Select rooms controlled by {z_d['label']}:",
@@ -260,6 +264,11 @@ def render_configuration_interface(uploaded_files):
             rooms_per_zone[z_key] = selected_keys
 
             st.markdown("---")
+
+        # If a zone was unmapped (set to None), clear its room links to avoid stale associations
+        for z_key in list(rooms_per_zone.keys()):
+            if z_key not in user_map:
+                rooms_per_zone[z_key] = []
 
     # ------------------------------------------------------------------
     # 4. Advanced / Environmental (alphabetical)
