@@ -76,7 +76,7 @@ st.markdown(
     .block-container { padding-top: 1.5rem !important; }
     [data-testid="stSidebar"] .block-container { padding-top: 0.75rem !important; }
     /* Nudge sidebar logo upward a bit more */
-    [data-testid="stSidebar"] img { margin-top: -12px !important; }
+    [data-testid="stSidebar"] img { margin-top: -22px !important; }
     </style>
     """,
     unsafe_allow_html=True,
