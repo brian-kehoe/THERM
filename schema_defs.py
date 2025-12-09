@@ -216,7 +216,41 @@ AI_CONTEXT_PROMPTS = {
 }
 
 # ==========================================
-# PART 3: HELPER FUNCTIONS
+# PART 3: UNIT CONVERSIONS & VALIDATION
+# ==========================================
+# Supported alternative units by sensor (UI dropdowns)
+ALT_UNIT_OPTIONS = {
+    # Wind speed commonly reported in m/s, km/h, or mph.
+    "Wind_Speed": ["m/s", "km/h", "mph"],
+}
+
+# Conversion functions to internal base units
+# Base units (identity) are included so the conversion table is complete.
+UNIT_CONVERSIONS = {
+    "degC": lambda x: x,
+    "W": lambda x: x,
+    "W/m2": lambda x: x,
+    "%": lambda x: x,
+    "Hz": lambda x: x,
+    "0/1": lambda x: x,
+    "Text": lambda x: x,
+    # Flow/volume helpers
+    "L/min": lambda x: x,
+    # Wind speed conversions
+    "m/s": lambda x: x,
+    "km/h": lambda x: x * 0.2777777778,
+    "mph": lambda x: x * 0.44704,
+}
+
+# Validation ranges for selected sensors (optional; extend as needed)
+VALIDATION_RULES = {
+    "OutdoorTemp": {"type": "numeric", "min": -40, "max": 55},
+    "Outdoor_Humidity": {"type": "numeric", "min": 0, "max": 100},
+    "Wind_Speed": {"type": "numeric", "min": 0, "max": 60},
+}
+
+# ==========================================
+# PART 4: HELPER FUNCTIONS
 # ==========================================
 
 def get_unit_options(sensor_key):
@@ -237,12 +271,21 @@ def get_unit_options(sensor_key):
         return []
 
     default_unit = definition.get("unit")
+    opts = ALT_UNIT_OPTIONS.get(sensor_key, [])
     if default_unit:
-        return [default_unit]
-    return []
+        opts = [default_unit] + opts
+
+    # Deduplicate while preserving order
+    seen = set()
+    deduped = []
+    for u in opts:
+        if u not in seen:
+            seen.add(u)
+            deduped.append(u)
+    return deduped
 
 # ==========================================
-# PART 4: ANALYSIS FEATURE FLAGS
+# PART 5: ANALYSIS FEATURE FLAGS
 # ==========================================
 
 REQUIRED_COLUMNS = {

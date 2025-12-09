@@ -79,6 +79,15 @@ st.markdown(
     [data-testid="stSidebar"] img { margin-top: -22px !important; }
     /* Move the sidebar tagline only */
     .sidebar-tagline { margin-top: -30px !important; display: block; }
+    /* Sticky wrapper for System Setup header + actions */
+    .setup-sticky {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background: inherit;
+        padding-bottom: 0.5rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -635,7 +644,7 @@ if uploaded_files:
 
                             debug_bundle = {
                                 "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
-                                "app_version": "public-beta-v2.8",
+                                "app_version": "public-beta-v4.2.3",
                                 "dataset_source": dataset_source,
                                 "config": config,
                                 "mapping": mapping_obj,
@@ -656,7 +665,7 @@ if uploaded_files:
                             # Single README text for all ZIPs
                             readme_text = (
                                 "THERM Debug Export README\n"
-                                f"Version: public-beta-v2.8\n"
+                                f"Version: public-beta-v4.2.3\n"
                                 f"Generated at: {pd.Timestamp.now(tz='UTC').isoformat()}\n\n"
                                 "Files in this archive:\n\n"
                                 "1) therm_merged_engine.csv\n"

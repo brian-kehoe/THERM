@@ -403,6 +403,17 @@ def apply_gatekeepers(df: pd.DataFrame, user_config: dict | None = None) -> pd.D
     - Applies tariff to build incremental cost
     """
     d = df.copy()
+
+    # Normalise units up front (honours user-selected units like km/h for wind)
+    try:
+        if isinstance(user_config, dict):
+            units_cfg = user_config.get("units") or {}
+            if units_cfg:
+                from data_normalizer import convert_units
+                d = convert_units(d, units_cfg)
+    except Exception:
+        # Unit conversion is best-effort; never break the pipeline
+        pass
     thresholds = PHYSICS_THRESHOLDS if isinstance(PHYSICS_THRESHOLDS, dict) else {}
 
     # 1. Physics
@@ -859,8 +870,18 @@ def get_daily_stats(df: pd.DataFrame) -> pd.DataFrame:
         "OutdoorTemp_mean": "Outdoor_Avg",
         "OutdoorTemp_min": "Outdoor_Min",
         "OutdoorTemp_max": "Outdoor_Max",
+        # Environmental averages for long-term trend charts
+        "Wind_Speed_mean": "Wind_Avg",
+        "Outdoor_Humidity_mean": "Humidity_Avg",
+        "Solar_Rad_mean": "Solar_Avg",
     }
     daily = daily.rename(columns=rename_map)
+
+    # Fallbacks from backup weather sources when primary columns are absent
+    if "Wind_Avg" not in daily.columns and "Wind_Speed_OWM_mean" in daily.columns:
+        daily["Wind_Avg"] = daily["Wind_Speed_OWM_mean"]
+    if "Humidity_Avg" not in daily.columns and "Outdoor_Humidity_OWM_mean" in daily.columns:
+        daily["Humidity_Avg"] = daily["Outdoor_Humidity_OWM_mean"]
 
     # kWh conversions (safe even if *_Wmin columns are missing)
     daily["Electricity_Heating_kWh"] = (

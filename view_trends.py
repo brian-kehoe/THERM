@@ -169,17 +169,31 @@ def render_long_term_trends(daily_df: pd.DataFrame, raw_df: pd.DataFrame, runs_l
         st.divider()
         c1, c2 = st.columns(2)
 
+        # Respect user-selected units for wind speed (default m/s)
+        wind_unit = "m/s"
+        wind_factor = 1.0
+        try:
+            cfg_units = st.session_state.get("system_config", {}).get("units", {})
+        except Exception:
+            cfg_units = {}
+        if isinstance(cfg_units, dict):
+            user_unit = cfg_units.get("Wind_Speed")
+            if user_unit in ["m/s", "km/h", "mph"]:
+                wind_unit = user_unit
+                wind_factor = {"m/s": 1.0, "km/h": 3.6, "mph": 2.23693629}[wind_unit]
+
         with c1:
             fig_env = make_subplots(specs=[[{"secondary_y": True}]])
             if "Wind_Avg" in daily_df.columns:
+                wind_series = pd.to_numeric(daily_df["Wind_Avg"], errors="coerce") * wind_factor
                 fig_env.add_trace(
                     go.Scatter(
                         x=daily_df.index,
-                        y=daily_df["Wind_Avg"],
+                        y=wind_series,
                         name="Wind",
                         line=dict(color="grey"),
                         connectgaps=True,
-                        hovertemplate="Wind: %{y:.1f} m/s",
+                        hovertemplate=f"Wind: %{{y:.1f}} {wind_unit}",
                     ),
                     secondary_y=False,
                 )
@@ -202,6 +216,8 @@ def render_long_term_trends(daily_df: pd.DataFrame, raw_df: pd.DataFrame, runs_l
                 height=300,
                 hovermode="x unified",
             )
+            fig_env.update_yaxes(title_text=f"Wind ({wind_unit})", secondary_y=False)
+            fig_env.update_yaxes(title_text="Humidity (%)", secondary_y=True)
             st.plotly_chart(fig_env, width="stretch", key="env_chart")
 
         with c2:

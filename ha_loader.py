@@ -1,6 +1,6 @@
 # ha_loader.py
 # Home Assistant → Engine-ready dataframe loader for THERM
-# Updated for public-beta-v2.8
+# Updated for public-beta-v4.2.3
 #
 # Key behaviours:
 #   - Loads HA long-form CSV (entity_id, state, last_changed/last_updated/time)
