@@ -421,6 +421,9 @@ def render_configuration_interface(uploaded_files):
             help=p["help"],
         )
 
+    # Sticky action bar container near the top
+    action_bar_top = st.container()
+
     config_object = {
         "profile_name": profile_name,
         "created_at": datetime.now().isoformat(),
