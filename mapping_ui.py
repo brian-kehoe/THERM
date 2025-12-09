@@ -258,6 +258,17 @@ def render_configuration_interface(uploaded_files):
 
     # Cached entity list (may be empty if skipping scan)
     available_entities = st.session_state.get("available_sensors", []) or []
+
+    # If a config already exists (user came back from analysis), preload it
+    existing_cfg = st.session_state.get("system_config")
+    if isinstance(existing_cfg, dict):
+        defaults.update(existing_cfg)
+        for k, v in (existing_cfg.get("mapping") or {}).items():
+            st.session_state.setdefault(f"map_{k}", v)
+        for k, v in (existing_cfg.get("units") or {}).items():
+            st.session_state.setdefault(f"unit_{k}", v)
+        for z_key, links in (existing_cfg.get("rooms_per_zone") or {}).items():
+            st.session_state.setdefault(f"link_{z_key}", links)
     # Auto-refresh entity cache when new files are provided or cache is empty
     if uploaded_files:
         files_key = sorted(

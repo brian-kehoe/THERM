@@ -95,7 +95,8 @@ st.markdown(
 
 # Decide whether we're in System Setup (no processed config yet)
 _log("app_run_start")
-in_system_setup = "system_config" not in st.session_state
+force_system_setup = st.session_state.get("force_system_setup", False)
+in_system_setup = force_system_setup or "system_config" not in st.session_state
 
 # Apply any one-shot scroll request
 _scroll_to_top_if_requested()
@@ -483,12 +484,13 @@ if uploaded_files:
 
     else:
         # --- CONFIGURATION WORKFLOW ---
-        if "system_config" not in st.session_state:
+        if force_system_setup or "system_config" not in st.session_state:
             _log("config_render_start")
             config_object = mapping_ui.render_configuration_interface(uploaded_files)
             _log("config_render_done")
             if config_object:
                 st.session_state["system_config"] = config_object
+                st.session_state.pop("force_system_setup", None)
                 st.rerun()
 
         else:
@@ -534,15 +536,7 @@ if uploaded_files:
 
                 # Back to System Setup instead of Change Profile / Remap here
                 if st.button("↩ Back to System Setup"):
-                    for key in [
-                        "system_config",
-                        "cached",
-                        "capabilities",
-                        "loaded_profile_signature",      # NEW: allow same profile to be loaded again
-                        "available_sensors",             # optional: force re-scan if files changed
-                        "available_sensors_files_key",
-                    ]:
-                        st.session_state.pop(key, None)
+                    st.session_state["force_system_setup"] = True
                     st.rerun()
 
 
