@@ -213,6 +213,9 @@ def render_configuration_interface(uploaded_files):
                     for k, v in defaults.get("units", {}).items():
                         st.session_state[f"unit_{k}"] = v
 
+                    # 3. Apply room links per zone
+                    for z_key, links in (defaults.get("rooms_per_zone") or {}).items():
+                        st.session_state[f"link_{z_key}"] = links
 
                 st.success(f"Loaded {defaults['profile_name']}")
             except Exception:
@@ -347,13 +350,20 @@ def render_configuration_interface(uploaded_files):
             saved_links = defaults.get("rooms_per_zone", {}).get(z_key, [])
             valid_defaults = [r for r in saved_links if r in room_keys_list] if z_s != "None" else []
 
+            # Avoid Streamlit warning when default + session_state both set:
+            # only pass default if the key is not already in session_state.
+            multiselect_kwargs = {
+                "format_func": lambda x: friendly_room_options[x],
+                "key": f"link_{z_key}",
+                "help": "Select which room sensors belong to this zone.",
+            }
+            if f"link_{z_key}" not in st.session_state:
+                multiselect_kwargs["default"] = valid_defaults
+
             selected_keys = st.multiselect(
                 f"Select rooms controlled by {z_d['label']}:",
                 options=room_keys_list,
-                default=valid_defaults,
-                format_func=lambda x: friendly_room_options[x],
-                key=f"link_{z_key}",
-                help="Select which room sensors belong to this zone.",
+                **multiselect_kwargs,
             )
             rooms_per_zone[z_key] = selected_keys
 
