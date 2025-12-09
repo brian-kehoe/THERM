@@ -92,13 +92,12 @@ def render_run_inspector(df, runs_list):
         start_str = r["start"].strftime("%d/%m/%Y %H:%M")
 
         if r["run_type"] == "DHW":
-            icon = ""
+            # Use a water drop to represent DHW runs; annotate if heating was also active
+            icon = "💧"
             if r.get("heating_during_dhw_detected") or r.get(
                 "ghost_pumping_power_detected"
             ):
-                icon += "⚠️ (Heating Active)"
-            else:
-                icon = "♨️"
+                icon += " (Heating Active)"
         else:
             icon = "🔥"
 
