@@ -340,9 +340,10 @@ def load_and_clean_data(
             .unstack()
         )
 
-        # Resample to 1 minute, FORWARD FILLING the state
-        # (state persists until changed)
-        df_state_wide = df_state_wide.resample("1min").ffill()
+        # Resample to 1 minute, keeping the last event within each minute
+        # (important when state changes land at hh:mm:ss, not exactly hh:mm)
+        # Then forward-fill so the state persists until the next change.
+        df_state_wide = df_state_wide.resample("1min").last().ffill()
 
     # 4. Merge
     if progress_cb:
