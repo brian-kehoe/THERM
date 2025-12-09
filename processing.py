@@ -696,7 +696,7 @@ def detect_runs(df: pd.DataFrame, user_config: dict | None = None) -> list[dict]
         active_zones_list = []
         if run_type == "Heating" and zone_cols:
             for z in zone_cols:
-                if (group[z].sum() / len(group)) > 0.5:
+                if (group[z].sum() / len(group)) > 0.1:
                     active_zones_list.append(z)
 
         friendly_zones = [
