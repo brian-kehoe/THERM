@@ -199,7 +199,7 @@ def get_all_unique_entities(uploaded_files):
     st.session_state["entity_scan_debug"] = debug_scans
     return sorted(list(found_entities))
 
-def render_sensor_row(label, internal_key, options, defaults, required=False, help_text=None):
+def render_sensor_row(label, internal_key, options, defaults, required=False, help_text=None, formatter=None):
     c1, c2 = st.columns([2, 1])
     
     widget_key = f"map_{internal_key}"
@@ -216,7 +216,7 @@ def render_sensor_row(label, internal_key, options, defaults, required=False, he
             options, 
             key=widget_key, 
             help=help_text,
-            format_func=_friendly_entity_label,
+            format_func=formatter or _friendly_entity_label,
             **selectbox_args
         )
     
@@ -402,6 +402,20 @@ def render_configuration_interface(uploaded_files):
         combined_entities = sorted(set(profile_entities + available_entities), key=lambda x: str(x).lower())
         options = ["None"] + combined_entities
 
+        # Friendly label map with collision handling (avoid duplicate-looking entries)
+        friendly_lookup = {}
+        label_counts: dict[str, int] = {}
+        for opt in combined_entities:
+            label = _friendly_entity_label(opt)
+            label_counts[label] = label_counts.get(label, 0) + 1
+            if label_counts[label] > 1:
+                friendly_lookup[opt] = f"{label} ({opt})"
+            else:
+                friendly_lookup[opt] = label
+
+        def format_opt(opt: str) -> str:
+            return friendly_lookup.get(opt, _friendly_entity_label(opt))
+
         # Quick diagnostics for discovery
         st.caption(f"Entities available: {len(available_entities)} (profile: {len(profile_entities)})")
 
@@ -431,6 +445,7 @@ def render_configuration_interface(uploaded_files):
                 defaults,
                 required=True,
                 help_text=d["description"],
+                formatter=format_opt,
             )
             if s != "None":
                 user_map[key] = s
@@ -449,6 +464,7 @@ def render_configuration_interface(uploaded_files):
                 defaults,
                 required=False,
                 help_text=d["description"],
+                formatter=format_opt,
             )
             if s != "None":
                 user_map[key] = s
@@ -476,6 +492,7 @@ def render_configuration_interface(uploaded_files):
                         defaults,
                         required=False,
                         help_text=None,
+                        formatter=format_opt,
                     )
                     if r_s != "None":
                         user_map[r_key] = r_s
@@ -501,6 +518,7 @@ def render_configuration_interface(uploaded_files):
                     defaults,
                     required=False,
                     help_text=z_d["description"],
+                    formatter=format_opt,
                 )
                 if z_s != "None":
                     user_map[z_key] = z_s
@@ -553,6 +571,7 @@ def render_configuration_interface(uploaded_files):
                     defaults,
                     required=False,
                     help_text=d.get("description", None),
+                    formatter=format_opt,
                 )
                 if s != "None":
                     user_map[key] = s
@@ -591,6 +610,8 @@ def render_configuration_interface(uploaded_files):
         with c_btn1:
             export_data = config_manager.export_config_for_sharing(config_object)
             export_data["rooms_per_zone"] = rooms_per_zone
+            # Ensure updated profile name is preserved on export/download
+            export_data["profile_name"] = profile_name
             st.download_button(
                 label=" 1. Save Configuration",
                 data=json.dumps(export_data, indent=2),
