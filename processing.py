@@ -428,6 +428,22 @@ def apply_gatekeepers(df: pd.DataFrame, user_config: dict | None = None) -> pd.D
     idx = d.index
     is_dhw_mask = pd.Series(False, index=idx)
 
+    # Forward-fill sparse DHW/valve indicators (Grafana state feeds are on-change)
+    ffill_cols = [
+        "Valve_Is_DHW",
+        "Valve_Is_Heating",
+        "DHW_Status_Is_On",
+        "DHW_Active",
+    ]
+    for col in ffill_cols:
+        if col in d.columns:
+            # For on-change state signals, keep last known value for up to 12 hours (720 minutes)
+            d[col] = d[col].fillna(method="ffill", limit=720)
+
+    # Forward-fill textual ValveMode labels over the same horizon
+    if "ValveMode" in d.columns:
+        d["ValveMode"] = d["ValveMode"].fillna(method="ffill", limit=720)
+
     # --- Valve evidence (primary) -------------------------------------------
     valve_dhw_mask = pd.Series(False, index=idx)
     valve_heating_mask = pd.Series(False, index=idx)
@@ -474,12 +490,13 @@ def apply_gatekeepers(df: pd.DataFrame, user_config: dict | None = None) -> pd.D
 
     # --- Combine valve + status into is_DHW ---------------------------------
     if has_valve_info:
-        # Valve defines the circuit:
-        # - If valve says Heating → not DHW regardless of status.
-        # - If valve says DHW → DHW only when status is "On" (if we have it),
-        #   otherwise fall back to valve alone.
+        # Valve defines the circuit when it actually indicates DHW.
         if has_status_info:
-            is_dhw_mask = valve_dhw_mask & dhw_status_mask
+            if valve_dhw_mask.any():
+                is_dhw_mask = valve_dhw_mask & dhw_status_mask
+            else:
+                # No DHW evidence from valve; fall back to status alone.
+                is_dhw_mask = dhw_status_mask
         else:
             is_dhw_mask = valve_dhw_mask
     else:
