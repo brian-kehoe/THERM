@@ -17,6 +17,23 @@ def _log(msg: str) -> None:
     """Best-effort console logger for profiling (disabled by default)."""
     return
 
+def _friendly_entity_label(entity: str) -> str:
+    """Trim common HA prefixes for display only."""
+    if not isinstance(entity, str):
+        return str(entity)
+    prefixes = (
+        "sensor.",
+        "binary_sensor.",
+        "switch.",
+        "climate.",
+        "input_boolean.",
+        "input_number.",
+    )
+    for p in prefixes:
+        if entity.startswith(p):
+            return entity[len(p):]
+    return entity
+
 
 # -------------------------------------------------------------------
 # FAST ENTITY SCAN (streaming) TO AVOID LOADING HUGE HA FILES
@@ -74,7 +91,7 @@ def _quick_entity_scan(file_obj, max_rows: int = 50_000, max_entities: int = 200
 
 def get_all_unique_entities(uploaded_files):
     """
-    Fast entity discovery with caching and timing debug info.
+    Entity discovery with caching and chunked parsing for long-form files.
     """
     entity_cache = st.session_state.get("entity_cache", {})
     debug_scans = []
@@ -83,43 +100,100 @@ def get_all_unique_entities(uploaded_files):
         file_obj.seek(0)
         sig = (getattr(file_obj, "name", None), getattr(file_obj, "size", None))
 
-        if sig in entity_cache:
-            found_entities.update(entity_cache[sig])
-            debug_scans.append({
-                "file": sig[0],
-                "cached": True,
-                "entities": len(entity_cache[sig]),
-                "secs": 0.0,
-            })
-            file_obj.seek(0)
-            continue
+        # Always refresh when invoked (cache is still updated for future calls)
+        cached = entity_cache.get(sig)
 
         t0 = time.time()
         try:
-            df_head = pd.read_csv(file_obj, nrows=2)
-            if 'entity_id' in df_head.columns:
+            df_head = pd.read_csv(file_obj, nrows=200)
+            cols_lower = {c.lower(): c for c in df_head.columns}
+
+            # --- LONG FORM: entity_id or similar ---
+            entity_col = None
+            for cand in ["entity_id", "entity id", "entity"]:
+                if cand in cols_lower:
+                    entity_col = cols_lower[cand]
+                    break
+
+            if entity_col:
                 file_obj.seek(0)
-                ents = _quick_entity_scan(file_obj)
-                found_entities.update(ents)
-                entity_cache[sig] = ents
+                ents_set: set[str] = set()
+                for chunk in pd.read_csv(file_obj, usecols=[entity_col], chunksize=50_000):
+                    vals = (
+                        chunk[entity_col]
+                        .astype(str)
+                        .dropna()
+                        .str.strip()
+                        .tolist()
+                    )
+                    ents_set.update([v for v in vals if v])
+                    if len(ents_set) >= 5000:
+                        break
+                ents = sorted(ents_set)
+
+            # --- LONG FORM: Grafana series ---
+            else:
+                if "series" in cols_lower:
+                    series_col = cols_lower["series"]
+                    file_obj.seek(0)
+                    ents = set()
+                    for chunk in pd.read_csv(file_obj, usecols=[series_col], chunksize=50_000):
+                        vals = (
+                            chunk[series_col]
+                            .astype(str)
+                            .dropna()
+                            .str.strip()
+                            .tolist()
+                        )
+                        ents.update([v for v in vals if v])
+                        if len(ents) >= 1000:
+                            break
+                    ents = sorted(ents)
+                else:
+                    # --- WIDE FORM ---
+                    ents = [
+                        c
+                        for c in df_head.columns
+                        if c.lower()
+                        not in [
+                            "time",
+                            "date",
+                            "timestamp",
+                            "datetime",
+                            "last_changed",
+                            "last_updated",
+                            "value",
+                            "state",
+                        ]
+                    ]
+
+            found_entities.update(ents)
+            # Update cache with the newly discovered entities (or fall back to cached)
+            if found_entities:
+                entity_cache[sig] = sorted(set(ents)) if 'ents' in locals() else []
                 debug_scans.append({
                     "file": sig[0],
                     "cached": False,
-                    "entities": len(ents),
+                    "entities": len(entity_cache[sig]),
                     "secs": time.time() - t0,
                 })
-            else:
-                cols = [c for c in df_head.columns if c.lower() not in ['time', 'date', 'timestamp', 'last_changed', 'series', 'value']]
-                found_entities.update(cols)
-                entity_cache[sig] = cols
+            elif cached:
+                found_entities.update(cached)
                 debug_scans.append({
                     "file": sig[0],
-                    "cached": False,
-                    "entities": len(cols),
-                    "secs": time.time() - t0,
+                    "cached": True,
+                    "entities": len(cached),
+                    "secs": 0.0,
                 })
         except Exception:
-            pass
+            if cached:
+                found_entities.update(cached)
+                debug_scans.append({
+                    "file": sig[0],
+                    "cached": True,
+                    "entities": len(cached),
+                    "secs": 0.0,
+                })
         file_obj.seek(0)
     st.session_state["entity_cache"] = entity_cache
     st.session_state["entity_scan_debug"] = debug_scans
@@ -142,6 +216,7 @@ def render_sensor_row(label, internal_key, options, defaults, required=False, he
             options, 
             key=widget_key, 
             help=help_text,
+            format_func=_friendly_entity_label,
             **selectbox_args
         )
     
@@ -183,6 +258,68 @@ def render_configuration_interface(uploaded_files):
 
     # Cached entity list (may be empty if skipping scan)
     available_entities = st.session_state.get("available_sensors", []) or []
+    # Auto-refresh entity cache when new files are provided or cache is empty
+    if uploaded_files:
+        files_key = sorted(
+            (getattr(f, "name", ""), getattr(f, "size", 0)) for f in uploaded_files
+        )
+        cached_key = st.session_state.get("available_sensors_files_key")
+        if (not available_entities) or (cached_key != files_key):
+            try:
+                refreshed = get_all_unique_entities(uploaded_files)
+                # Filter out blanks/None
+                refreshed = [e for e in refreshed if isinstance(e, str) and e.strip()]
+                if not refreshed:
+                    # Fallback: naive column/entity scrape so dropdowns aren't empty
+                    fallback_entities: set[str] = set()
+                    for f in uploaded_files:
+                        try:
+                            f.seek(0)
+                            df_head = pd.read_csv(f, nrows=200)
+                            cols = list(df_head.columns)
+                            cols_lower = [c.lower() for c in cols]
+                            if "entity_id" in cols_lower:
+                                e_col = cols[cols_lower.index("entity_id")]
+                                vals = (
+                                    df_head[e_col]
+                                    .astype(str)
+                                    .dropna()
+                                    .str.strip()
+                                    .tolist()
+                                )
+                                fallback_entities.update([v for v in vals if v])
+                            elif "series" in cols_lower:
+                                s_col = cols[cols_lower.index("series")]
+                                vals = (
+                                    df_head[s_col]
+                                    .astype(str)
+                                    .dropna()
+                                    .str.strip()
+                                    .tolist()
+                                )
+                                fallback_entities.update([v for v in vals if v])
+                            else:
+                                ignore = {"time", "timestamp", "date", "datetime", "last_changed", "last_updated"}
+                                for c in cols:
+                                    if c.lower() not in ignore:
+                                        fallback_entities.add(c)
+                        except Exception:
+                            continue
+                        finally:
+                            try:
+                                f.seek(0)
+                            except Exception:
+                                pass
+                    if fallback_entities:
+                        refreshed = sorted(fallback_entities)
+
+                if refreshed:
+                    available_entities = refreshed
+                    st.session_state["available_sensors"] = available_entities
+                    st.session_state["available_sensors_files_key"] = files_key
+            except Exception:
+                # Best-effort: keep existing cache if scan fails
+                available_entities = st.session_state.get("available_sensors", []) or []
     profile_loaded = False
     loaded_profile_name = None
 
@@ -261,9 +398,12 @@ def render_configuration_interface(uploaded_files):
         # Build options list:
         #   - Entities from the loaded profile mapping
         #   - PLUS any entities discovered/cached from files (if refreshed)
-        profile_entities = list((defaults.get("mapping") or {}).values())
-        combined_entities = sorted(set(profile_entities + available_entities))
+        profile_entities = [v for v in (defaults.get("mapping") or {}).values() if v]
+        combined_entities = sorted(set(profile_entities + available_entities), key=lambda x: str(x).lower())
         options = ["None"] + combined_entities
+
+        # Quick diagnostics for discovery
+        st.caption(f"Entities available: {len(available_entities)} (profile: {len(profile_entities)})")
 
         # --- Profile name ---
         with col_name:

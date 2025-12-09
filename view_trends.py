@@ -211,13 +211,26 @@ def render_long_term_trends(daily_df: pd.DataFrame, raw_df: pd.DataFrame, runs_l
                     secondary_y=True,
                 )
 
+            if "Global_SCOP" in daily_df.columns:
+                fig_env.add_trace(
+                    go.Scatter(
+                        x=daily_df.index,
+                        y=daily_df["Global_SCOP"],
+                        name="SCOP",
+                        line=dict(color="green"),
+                        connectgaps=True,
+                        hovertemplate="SCOP: %{y:.2f}",
+                    ),
+                    secondary_y=True,
+                )
+
             fig_env.update_layout(
                 title="Wind & Humidity",
                 height=300,
                 hovermode="x unified",
             )
             fig_env.update_yaxes(title_text=f"Wind ({wind_unit})", secondary_y=False)
-            fig_env.update_yaxes(title_text="Humidity (%)", secondary_y=True)
+            fig_env.update_yaxes(title_text="Humidity (%) / SCOP", secondary_y=True)
             st.plotly_chart(fig_env, width="stretch", key="env_chart")
 
         with c2:

@@ -443,6 +443,20 @@ if uploaded_files:
         file_details = details_all.get("file_details", {})
         sensor_debug = details_all.get("sensor_debug", {})
 
+        # Keep the entity list in sync with the mapping UI options
+        try:
+            all_entities = []
+            for info in file_details.values():
+                ents = info.get("entities_found") or []
+                all_entities.extend(ents)
+            if all_entities:
+                # Stable cache key to avoid stale entities across file changes
+                files_key = sorted((getattr(f, "name", ""), getattr(f, "size", 0)) for f in uploaded_files)
+                st.session_state["available_sensors"] = sorted(set(all_entities))
+                st.session_state["available_sensors_files_key"] = files_key
+        except Exception:
+            pass
+
         # ---- FILE-LEVEL DETAILS ----
         for fname, info in file_details.items():
             with st.expander(f"File Details: {fname}", expanded=False):
