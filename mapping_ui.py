@@ -182,6 +182,8 @@ def render_configuration_interface(uploaded_files):
 
     # Cached entity list (may be empty if skipping scan)
     available_entities = st.session_state.get("available_sensors", []) or []
+    profile_loaded = False
+    loaded_profile_name = None
 
     # --- Load Profile (JSON) ---
     with col_load:
@@ -225,8 +227,9 @@ def render_configuration_interface(uploaded_files):
                     for z_key, links in (defaults.get("rooms_per_zone") or {}).items():
                         st.session_state[f"link_{z_key}"] = links
 
-                st.success(f"Loaded {defaults['profile_name']}")
                 _log(f"profile_apply_defaults secs={time.time()-t_profile:.3f}")
+                profile_loaded = True
+                loaded_profile_name = defaults["profile_name"]
             except Exception:
                 st.error("Failed to load profile JSON.")
 
@@ -259,10 +262,11 @@ def render_configuration_interface(uploaded_files):
     # --- Profile name ---
     with col_name:
         profile_name = st.text_input("Profile Name", value=defaults["profile_name"])
+        if profile_loaded and loaded_profile_name:
+            st.success(f"Loaded {loaded_profile_name}")
 
     user_map: dict = {}
     user_units: dict = {}
-
 
     # ------------------------------------------------------------------
     # 1. Critical Sensors
@@ -417,11 +421,6 @@ def render_configuration_interface(uploaded_files):
             help=p["help"],
         )
 
-    # ------------------------------------------------------------------
-    # 6. Two-Step Actions: Save Configuration + Process Data
-    # ------------------------------------------------------------------
-    c_btn1, c_btn2 = st.columns(2)
-
     config_object = {
         "profile_name": profile_name,
         "created_at": datetime.now().isoformat(),
@@ -431,29 +430,37 @@ def render_configuration_interface(uploaded_files):
         "rooms_per_zone": rooms_per_zone,
         "therm_version": "2.0",
     }
+    # ------------------------------------------------------------------
+    # 6. Two-Step Actions: Save Configuration + Process Data (top bar)
+    # ------------------------------------------------------------------
+    with action_bar_top:
+        st.divider()
+        c_btn1, c_btn2 = st.columns(2)
 
-    with c_btn1:
-        export_data = config_manager.export_config_for_sharing(config_object)
-        export_data["rooms_per_zone"] = rooms_per_zone
-        st.download_button(
-            label=" 1. Save Configuration",
-            data=json.dumps(export_data, indent=2),
-            file_name=f"therm_profile_{profile_name.replace(' ', '_')}.json",
-            mime="application/json",
-            type="secondary",
-        )
+        with c_btn1:
+            export_data = config_manager.export_config_for_sharing(config_object)
+            export_data["rooms_per_zone"] = rooms_per_zone
+            st.download_button(
+                label=" 1. Save Configuration",
+                data=json.dumps(export_data, indent=2),
+                file_name=f"therm_profile_{profile_name.replace(' ', '_')}.json",
+                mime="application/json",
+                type="secondary",
+            )
 
-    with c_btn2:
-        if st.button(" 2. Process Uploaded Data", type="primary"):
-            # Ensure at least one critical sensor is mapped
-            if not any(k in user_map for k in REQUIRED_SENSORS):
-                st.error("Missing required sensors.")
-                return None
-            else:
-                # Flag the main app to scroll to top on the next render
-                st.session_state["scroll_to_top"] = True
-                _log(f"render_configuration_interface done secs={time.time()-t_render_start:.3f} result=config_object")
-                return config_object
+        with c_btn2:
+            if st.button(" 2. Process Uploaded Data", type="primary"):
+                # Ensure at least one critical sensor is mapped
+                if not any(k in user_map for k in REQUIRED_SENSORS):
+                    st.error("Missing required sensors.")
+                    return None
+                else:
+                    # Flag the main app to scroll to top on the next render
+                    st.session_state["scroll_to_top"] = True
+                    _log(f"render_configuration_interface done secs={time.time()-t_render_start:.3f} result=config_object")
+                    return config_object
+
+        st.divider()
 
     _log(f"render_configuration_interface done secs={time.time()-t_render_start:.3f} result=None")
     return None
