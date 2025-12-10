@@ -827,9 +827,10 @@ def render_configuration_interface(uploaded_files):
         # ------------------------------------------------------------------
         ai_inputs: dict = {}
         for k, p in AI_CONTEXT_PROMPTS.items():
+            default_text = defaults["ai_context"].get(k, p.get("placeholder", ""))
             ai_inputs[k] = st.text_area(
                 p["label"],
-                value=defaults["ai_context"].get(k, ""),
+                value=default_text,
                 help=p["help"],
             )
 
