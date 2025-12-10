@@ -531,6 +531,7 @@ def render_long_term_trends(daily_df: pd.DataFrame, raw_df: pd.DataFrame, runs_l
             "system_context": _build_system_context(user_config, include_heating_note),
             "tariff_summary": _build_tariff_summary(user_config),
             "ai_context": ai_context_inputs,
+            "config_history": user_config.get("config_history", []) if isinstance(user_config, dict) else [],
             "period_summary": period_summary,
             "daily_metrics": json_ready.to_dict(orient="records"),
         }

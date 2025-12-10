@@ -1180,6 +1180,7 @@ def render_run_inspector(df, runs_list):
             "system_context": _build_system_context(
                 user_config, bool(selected_run.get("heating_during_dhw_detected"))
             ),
+            "config_history": user_config.get("config_history", []) if isinstance(user_config, dict) else [],
 
             "configuration_state": {
 

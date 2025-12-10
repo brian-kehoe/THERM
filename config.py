@@ -325,5 +325,23 @@ CONFIG_HISTORY = [
     {"start": "2025-12-04", "config_tag": "Sequential Schedule", "change_note": "DHW Day 13:00-13:59, Heating D/S Thermostat 13:00-14:00 @ 17.5C."}
 ]
 
-# Deprecated static AI context; dynamic context is built per request from user freetext.
-AI_SYSTEM_CONTEXT = ""
+AI_SYSTEM_CONTEXT = """
+SYSTEM CONTEXT FOR AI ANALYSIS (HEAT PUMP PHYSICS & SETTINGS):
+- Heat Pump Model: Samsung EHS Mono Gen 6 (AE080RXYDEG/EU).
+- Controller: Joule Kodiak Control Board (SmartPlumb System).
+- Control Logic: "Single Master Curve". The system generates water based on the Radiator Requirement.
+- Efficiency Goal: Weather Compensation (Low Flow Temp at mild Outdoor Temp).
+- Anomaly Detection: System Limit (43°C), Short Cycling, Cost Inefficiency, DHW Drag.
+- Property: 175sqm Detached A1 Rated House. High Thermal Mass.
+- Operational Strategy: "Super-Heating" the fabric during Night Rate (02:00-06:00).
+- Flow Limiting Context: "Virtual_FTlim" = minutes where Actual Flow runs >2 degC below Target during heating. High totals point to flow restriction (air/pump/valves), aggressive curve, or mixing.
+
+KNOWN SYSTEM BEHAVIOUR (HEATING DURING DHW):
+- CONTROL LIMITATION: Heating zone pumps (UFH and Rads) can run during DHW production.
+- PHYSICAL CONSEQUENCE:
+  1. Hydraulic Mixing.
+  2. Elevated Return Temperatures.
+  3. Efficiency Penalty (< 2.0 COP).
+- DETECTION RULE: 'heating_during_dhw_detected' = TRUE if any heating zone pump is ON for >15% of DHW duration.
+- INTERPRETATION RULE: If detected, attribute low efficiency to this hydraulic crossover.
+"""

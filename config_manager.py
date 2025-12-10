@@ -12,6 +12,7 @@ PRESERVED_KEYS = {
     "mapping",
     "units",
     "ai_context",
+    "config_history",
     "rooms_per_zone",
     "tariff_structure",
     "thresholds",
@@ -42,7 +43,7 @@ def export_config_for_sharing(config):
     Creates a clean version of the config for download.
     """
     # Preserve editable fields from the in-memory config (including updated profile_name)
-    export_data = {k: config.get(k, {}) for k in PRESERVED_KEYS}
+    export_data = {k: (config.get(k, []) if k == "config_history" else config.get(k, {})) for k in PRESERVED_KEYS}
 
     # Fill defaults where absent
     export_data["therm_version"] = export_data.get("therm_version") or "2.0"
@@ -50,6 +51,7 @@ def export_config_for_sharing(config):
     export_data["mapping"] = export_data.get("mapping") or {}
     export_data["units"] = export_data.get("units") or {}
     export_data["ai_context"] = export_data.get("ai_context") or {}
+    export_data["config_history"] = export_data.get("config_history") or []
     export_data["rooms_per_zone"] = export_data.get("rooms_per_zone") or {}
 
     export_data["exported_at"] = datetime.now().isoformat()

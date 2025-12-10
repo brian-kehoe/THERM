@@ -897,15 +897,21 @@ def render_configuration_interface(uploaded_files):
             return "Flat"
 
         tariff_mode_default = _infer_mode(tariff_structure_cfg)
-        if "tariff_mode" not in st.session_state:
-            st.session_state["tariff_mode"] = tariff_mode_default
+        # Keep UI aligned with loaded profile; allow in-session edits
+        ts_signature = json.dumps(tariff_structure_cfg, sort_keys=True, default=str)
+        current_mode = st.session_state.get("tariff_mode", tariff_mode_default)
+        if st.session_state.get("tariff_mode_signature") != ts_signature:
+            current_mode = tariff_mode_default
+        if current_mode not in ["Flat", "Day/Night", "Custom bands"]:
+            current_mode = tariff_mode_default
         tariff_mode = st.radio(
             "Tariff / Cost Structure",
             options=["Flat", "Day/Night", "Custom bands"],
-            index=["Flat", "Day/Night", "Custom bands"].index(st.session_state["tariff_mode"]),
+            index=["Flat", "Day/Night", "Custom bands"].index(current_mode),
             key="tariff_mode",
             help="Define how electricity cost varies over time.",
         )
+        st.session_state["tariff_mode_signature"] = ts_signature
 
         if tariff_mode == "Flat":
             flat_rate = st.number_input(
@@ -1040,6 +1046,63 @@ def render_configuration_interface(uploaded_files):
                 entered = ""
             ai_inputs[k] = entered
 
+        # ------------------------------------------------------------------
+        # 7b. Config Change History
+        # ------------------------------------------------------------------
+        st.subheader("Heat Pump Config Change History")
+        st.caption("Keep a simple log of configuration changes; entries are timestamped automatically.")
+        st.session_state.setdefault("config_history", [])
+        st.session_state.setdefault("new_change_tag", "")
+        st.session_state.setdefault("new_change_note", "")
+
+        def _add_change_cb() -> None:
+            tag = st.session_state.get("new_change_tag", "").strip()
+            note = st.session_state.get("new_change_note", "").strip()
+            if not note:
+                st.session_state["config_hist_error"] = "Please enter a change note before adding."
+                return
+            entry = {
+                "start": datetime.now().isoformat(timespec="seconds"),
+                "config_tag": tag,
+                "change_note": note,
+            }
+            st.session_state["config_history"] = [entry] + st.session_state.get("config_history", [])
+            st.session_state["new_change_tag"] = ""
+            st.session_state["new_change_note"] = ""
+            st.session_state.pop("config_hist_error", None)
+
+        def _delete_change_cb(start_val: str) -> None:
+            st.session_state["config_history"] = [
+                r for r in st.session_state.get("config_history", []) if str(r.get("start")) != str(start_val)
+            ]
+
+        st.text_input("Change tag (optional)", key="new_change_tag")
+        st.text_area(
+            "Change note",
+            key="new_change_note",
+            placeholder="e.g., Pump set to Constant Speed II; DHW target raised to 50C.",
+        )
+        st.button("Add change", on_click=_add_change_cb)
+        if st.session_state.get("config_hist_error"):
+            st.warning(st.session_state["config_hist_error"])
+
+        hist_list = list(st.session_state.get("config_history", []))
+        if hist_list:
+            st.markdown("**Saved changes** (newest first)")
+            for idx, row in enumerate(sorted(hist_list, key=lambda r: str(r.get("start", "")), reverse=True)):
+                with st.container():
+                    ts_raw = row.get("start", "")
+                    try:
+                        ts_fmt = datetime.fromisoformat(str(ts_raw)).strftime("%d-%m-%Y %H:%M")
+                    except Exception:
+                        ts_fmt = str(ts_raw)
+                    c1, c2, c3 = st.columns([2, 6, 1])
+                    c1.write(ts_fmt)
+                    c2.write(f"{row.get('config_tag', '')} - {row.get('change_note', '')}".strip(" -"))
+                    c3.button("Delete", key=f"del_hist_{idx}", on_click=_delete_change_cb, args=(row.get("start", ""),))
+        else:
+            st.info("No config changes logged yet.")
+
         # Refresh profile_name from session to avoid stale downloads when text was just edited
         profile_name = st.session_state.get("profile_name_input", profile_name)
         config_object = {
@@ -1048,6 +1111,7 @@ def render_configuration_interface(uploaded_files):
             "mapping": user_map,
             "units": user_units,
             "ai_context": ai_inputs,
+            "config_history": st.session_state.get("config_history", []),
             "rooms_per_zone": rooms_per_zone,
             "thresholds": thresholds_cfg,
             "physics_thresholds": physics_cfg,
@@ -1065,6 +1129,7 @@ def render_configuration_interface(uploaded_files):
         with c_btn1:
             export_data = config_manager.export_config_for_sharing(config_object)
             export_data["rooms_per_zone"] = rooms_per_zone
+            export_data["config_history"] = st.session_state.get("config_history", [])
             # Ensure updated profile name is preserved on export/download
             export_data["profile_name"] = profile_name
             st.download_button(
