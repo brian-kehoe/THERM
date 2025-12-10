@@ -16,6 +16,7 @@ PRESERVED_KEYS = {
     "tariff_structure",
     "thresholds",
     "physics_thresholds",
+    "currency",
 }
 from schema_defs import REQUIRED_SENSORS, check_feature_availability
 

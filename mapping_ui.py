@@ -832,6 +832,14 @@ def render_configuration_interface(uploaded_files):
         # 6. Tariff / Cost Structure
         # ------------------------------------------------------------------
         tariff_structure_cfg = defaults.get("tariff_structure", config.TARIFF_STRUCTURE)
+        currency_default = defaults.get("currency", "€")
+        currency_options = ["€", "£", "$"]
+        currency = st.selectbox(
+            "Currency",
+            options=currency_options,
+            index=currency_options.index(currency_default) if currency_default in currency_options else 0,
+            help="Currency symbol used for tariff rates.",
+        )
 
         # Determine default mode
         def _infer_mode(ts):
@@ -850,7 +858,7 @@ def render_configuration_interface(uploaded_files):
 
         if tariff_mode == "Flat":
             flat_rate = st.number_input(
-                "Flat rate (€/kWh)",
+                f"Flat rate ({currency}/kWh)",
                 value=float(tariff_structure_cfg.get("day_rate", 0.33) if isinstance(tariff_structure_cfg, dict) else 0.33),
                 step=0.01,
                 min_value=0.0,
@@ -869,8 +877,8 @@ def render_configuration_interface(uploaded_files):
                 night_start_default = "00:00"
                 night_end_default = "07:00"
 
-            day_rate = st.number_input("Day rate (€/kWh)", value=day_rate_default, step=0.01, min_value=0.0)
-            night_rate = st.number_input("Night rate (€/kWh)", value=night_rate_default, step=0.01, min_value=0.0)
+            day_rate = st.number_input(f"Day rate ({currency}/kWh)", value=day_rate_default, step=0.01, min_value=0.0)
+            night_rate = st.number_input(f"Night rate ({currency}/kWh)", value=night_rate_default, step=0.01, min_value=0.0)
             col_ns, col_ne = st.columns(2)
             with col_ns:
                 night_start = st.text_input("Night start (HH:MM)", value=night_start_default)
@@ -915,7 +923,7 @@ def render_configuration_interface(uploaded_files):
                     "name": st.column_config.TextColumn("Name"),
                     "start": st.column_config.TextColumn("Start (HH:MM)"),
                     "end": st.column_config.TextColumn("End (HH:MM)"),
-                    "rate": st.column_config.NumberColumn("Rate (€/kWh)", format="%.3f", step=0.01, min_value=0.0),
+                    "rate": st.column_config.NumberColumn(f"Rate ({currency}/kWh)", format="%.3f", step=0.01, min_value=0.0),
                 },
             )
 
@@ -972,6 +980,7 @@ def render_configuration_interface(uploaded_files):
             "thresholds": thresholds_cfg,
             "physics_thresholds": physics_cfg,
             "tariff_structure": tariff_structure_cfg,
+            "currency": currency,
             "therm_version": "2.0",
         }
 
