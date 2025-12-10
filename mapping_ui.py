@@ -244,6 +244,43 @@ def render_configuration_interface(uploaded_files):
     t_render_start = time.time()
     _log("render_configuration_interface start")
 
+    # Helper: ensure custom tariff bands cover 24h (no gaps)
+    def _validate_tariff_coverage(ts_cfg) -> tuple[bool, str]:
+        if not isinstance(ts_cfg, list) or not ts_cfg:
+            return True, ""
+        rules = ts_cfg[0].get("rules", [])
+        if not rules:
+            return False, "Tariff rules are empty."
+        covered = [False] * (24 * 60)
+
+        def _parse_minutes(val: str) -> int | None:
+            try:
+                s = str(val)
+                if s in ("24:00", "24:00:00"):
+                    return 24 * 60
+                t = pd.to_datetime(s, errors="coerce").time()
+                return t.hour * 60 + t.minute
+            except Exception:
+                return None
+
+        for r in rules:
+            s_min = _parse_minutes(r.get("start", "00:00"))
+            e_min = _parse_minutes(r.get("end", "00:00"))
+            try:
+                float(r.get("rate", 0))
+            except Exception:
+                return False, f"Invalid rate in tariff rule: {r}"
+            if s_min is None or e_min is None:
+                return False, f"Invalid time in tariff rule: {r}"
+            if e_min <= s_min:
+                e_min += 24 * 60
+            for m in range(s_min, e_min):
+                covered[m % (24 * 60)] = True
+
+        if not all(covered):
+            return False, "Tariff rules must cover all 24 hours with no gaps."
+        return True, ""
+
     # Two containers: the top block stays sticky; the rest scrolls normally.
     top_section = st.container()
     body_section = st.container()
@@ -258,6 +295,7 @@ def render_configuration_interface(uploaded_files):
         "thresholds": {},
         "physics_thresholds": {},
         "tariff_structure": config.TARIFF_STRUCTURE,
+        "currency": "€",
     }
 
     # Cached entity list (may be empty if skipping scan)
@@ -945,7 +983,7 @@ def render_configuration_interface(uploaded_files):
                         "end": str(row.get("end", "00:00")),
                         "rate": rate_val,
                     }
-                )
+                    )
 
             tariff_structure_cfg = [
                 {
@@ -954,6 +992,10 @@ def render_configuration_interface(uploaded_files):
                     "rules": rules_list,
                 }
             ]
+            ok, err = _validate_tariff_coverage(tariff_structure_cfg)
+            if not ok:
+                st.error(err)
+                return None
 
         st.divider()
 
