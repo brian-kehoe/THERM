@@ -67,7 +67,7 @@ def _scroll_to_top_if_requested() -> None:
 # --- end scroll helper --------------------------------------------------------
 
 
-st.set_page_config(page_title="therm v2 beta", layout="wide", page_icon="assets/therm_logo_browser_tab.png")
+st.set_page_config(page_title="therm", layout="wide", page_icon="assets/therm_logo_browser_tab.png")
 # Reduce top padding in main and sidebar to pull content up
 st.markdown(
     """
