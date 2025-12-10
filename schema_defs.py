@@ -194,9 +194,9 @@ ENVIRONMENTAL_SENSORS = {
 # 7. AI Context Prompts
 AI_CONTEXT_PROMPTS = {
     "hp_model": {
-        "label": "Heat Pump Model",
-        "placeholder": "e.g., Samsung Gen 6, Daikin Altherma 3...",
-        "help": "Helps the AI identify model-specific quirks (e.g., defrost behavior)."
+        "label": "Heat Pump Details",
+        "placeholder": "e.g., Samsung Gen 6, defrost quirks, weather compensation slope/offset, curve limits...",
+        "help": "Helps the AI identify model-specific quirks and control strategy (e.g., weather compensation, defrost behaviour)."
     },
     "property_context": {
         "label": "Property Context",
