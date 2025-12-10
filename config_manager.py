@@ -13,6 +13,9 @@ PRESERVED_KEYS = {
     "units",
     "ai_context",
     "rooms_per_zone",
+    "tariff_structure",
+    "thresholds",
+    "physics_thresholds",
 }
 from schema_defs import REQUIRED_SENSORS, check_feature_availability
 

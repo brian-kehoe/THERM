@@ -579,13 +579,19 @@ def apply_gatekeepers(df: pd.DataFrame, user_config: dict | None = None) -> pd.D
     # Retain legacy "is_night_rate" for any downstream logic/visuals
     d["is_night_rate"] = d["hour"].isin(NIGHT_HOURS)
 
+    tariff_structure = (
+        user_config.get("tariff_structure", TARIFF_STRUCTURE)
+        if isinstance(user_config, dict)
+        else TARIFF_STRUCTURE
+    )
+
     try:
-        d["Current_Rate"] = _compute_tariff_series(d.index, TARIFF_STRUCTURE)
+        d["Current_Rate"] = _compute_tariff_series(d.index, tariff_structure)
     except Exception:
         # Conservative fallback to previous behaviour
-        if isinstance(TARIFF_STRUCTURE, dict):
-            rate_day = TARIFF_STRUCTURE.get("day_rate", 0.35)
-            rate_night = TARIFF_STRUCTURE.get("night_rate", 0.15)
+        if isinstance(tariff_structure, dict):
+            rate_day = tariff_structure.get("day_rate", 0.35)
+            rate_night = tariff_structure.get("night_rate", 0.15)
         else:
             rate_day = 0.35
             rate_night = 0.15
