@@ -137,9 +137,6 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 
-with st.sidebar.expander("About therm", expanded=False):
-    st.markdown("**therm (beta) - Heat Pump Performance Analysis**")
-
 with st.sidebar.expander("Data source & files", expanded=in_system_setup):
     _log("sidebar_upload_start")
     # Use a versioned key so we can hard-reset the uploader
@@ -208,23 +205,24 @@ with st.sidebar.expander("Data source & files", expanded=in_system_setup):
         st.rerun()
 
 # --- Sample data download (optional helper) ---
-with st.sidebar.expander("Download Sample Data", expanded=False):
-    samples = [
-        ("grafana_numeric_longterm.csv", "sample_data/grafana_numeric_longterm.csv", "text/csv"),
-        ("grafana_state_longterm.csv", "sample_data/grafana_state_longterm.csv", "text/csv"),
-        ("therm_profile_Samsung_-_Sample_Profile.json", "sample_data/therm_profile_Samsung_-_Sample_Profile.json", "application/json"),
-    ]
-    for label, rel_path, mime in samples:
-        p = Path(rel_path)
-        if p.exists():
-            st.download_button(
-                f"Download {label}",
-                data=p.read_bytes(),
-                file_name=label,
-                mime=mime,
-            )
-        else:
-            st.caption(f"{label} (file not found)")
+if in_system_setup:
+    with st.sidebar.expander("Download Sample Data", expanded=False):
+        samples = [
+            ("grafana_numeric_longterm.csv", "sample_data/grafana_numeric_longterm.csv", "text/csv"),
+            ("grafana_state_longterm.csv", "sample_data/grafana_state_longterm.csv", "text/csv"),
+            ("therm_profile_Samsung_-_Sample_Profile.json", "sample_data/therm_profile_Samsung_-_Sample_Profile.json", "application/json"),
+        ]
+        for label, rel_path, mime in samples:
+            p = Path(rel_path)
+            if p.exists():
+                st.download_button(
+                    f"Download {label}",
+                    data=p.read_bytes(),
+                    file_name=label,
+                    mime=mime,
+                )
+            else:
+                st.caption(f"{label} (file not found)")
 # === MANUAL CACHING LOGIC ===
 def get_processed_data(files, user_config):
     """
@@ -851,8 +849,9 @@ if uploaded_files:
                             # Debug export must never break the main UI
                             pass
 
-
-
+                # About therm (analysis views)
+                with st.sidebar.expander("About therm", expanded=False):
+                    st.markdown("**therm (beta) - Heat Pump Performance Analysis**")
 
             # 3. Render Dashboard (main panel)
             if data and mode:
