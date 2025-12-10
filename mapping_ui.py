@@ -388,6 +388,8 @@ def render_configuration_interface(uploaded_files):
                     _log(f"profile_apply_defaults secs={time.time()-t_profile:.3f}")
                     profile_loaded = True
                     loaded_profile_name = defaults["profile_name"]
+                    # Sync profile name state with loaded profile
+                    st.session_state["profile_name_input"] = defaults["profile_name"]
                 except Exception:
                     st.error("Failed to load profile JSON.")
 
@@ -434,8 +436,10 @@ def render_configuration_interface(uploaded_files):
         st.caption(f"Entities available: {len(available_entities)} (profile: {len(profile_entities)})")
 
         # --- Profile name ---
+        if "profile_name_input" not in st.session_state:
+            st.session_state["profile_name_input"] = defaults["profile_name"]
         with col_name:
-            profile_name = st.text_input("Profile Name", value=defaults["profile_name"])
+            profile_name = st.text_input("Profile Name", key="profile_name_input")
             if profile_loaded and loaded_profile_name:
                 st.success(f"Loaded {loaded_profile_name}")
 
