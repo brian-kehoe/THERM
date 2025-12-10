@@ -78,7 +78,7 @@ st.markdown(
     /* Nudge sidebar logo upward a bit more and center it */
     [data-testid="stSidebar"] img { margin-top: -22px !important; display: block !important; margin-left: auto !important; margin-right: auto !important; }
     /* Move the sidebar tagline only */
-    .sidebar-tagline { margin-top: -30px !important; display: block; }
+    .sidebar-tagline { margin-top: -30px !important; display: block; text-align: center; }
     /* Sticky wrapper for System Setup header + actions */
     .setup-sticky {
         position: sticky;
@@ -132,7 +132,7 @@ col1, col2, col3 = st.sidebar.columns([0.5, 3, 0.5])
 with col2:
     st.image("assets/therm_logo.png")
 st.sidebar.markdown(
-    "<div class='sidebar-tagline'><strong>Thermal Health & Efficiency Reporting Module v2 beta</strong></div><div style='height:10px'></div>",
+    "<div class='sidebar-tagline'><strong>Thermal Health & Efficiency Reporting Module (Beta)</strong></div><div style='height:10px'></div>",
     unsafe_allow_html=True,
 )
 
@@ -729,7 +729,7 @@ if uploaded_files:
 
                             debug_bundle = {
                                 "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
-                                "app_version": "public-beta-v4.2.3",
+                                "app_version": "public-beta-v4.3",
                                 "dataset_source": dataset_source,
                                 "config": config,
                                 "mapping": mapping_obj,
@@ -750,7 +750,7 @@ if uploaded_files:
                             # Single README text for all ZIPs
                             readme_text = (
                                 "THERM Debug Export README\n"
-                                f"Version: public-beta-v4.2.3\n"
+                                f"Version: public-beta-v4.3\n"
                                 f"Generated at: {pd.Timestamp.now(tz='UTC').isoformat()}\n\n"
                                 "Files in this archive:\n\n"
                                 "1) therm_merged_engine.csv\n"

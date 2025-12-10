@@ -1,6 +1,6 @@
 # ha_loader.py
 # Home Assistant → Engine-ready dataframe loader for THERM
-# Updated for public-beta-v4.2.3
+# Updated for public-beta-v4.3
 #
 # Key behaviours:
 #   - Loads HA long-form CSV (entity_id, state, last_changed/last_updated/time)
@@ -346,6 +346,105 @@ def enrich_modbus_interpretation(df: pd.DataFrame, user_config: Dict[str, Any]) 
 
 
 # ----------------------------------------------------------------------
+# SAMPLING QUALITY DETECTION
+# ----------------------------------------------------------------------
+
+def _infer_sampling_meta(
+    grouped: pd.DataFrame,
+    ts_col: str,
+    user_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Infer whether the HA feed is sparse/hourly so we can avoid per-run logic.
+
+    Heuristic:
+      - Look at the mapped Power entity in the pre-resample grouped data.
+      - Compute median spacing between samples and overall coverage ratio
+        (events / expected per-minute rows over the timespan).
+      - Flag as sparse if median spacing is >= 45 minutes OR coverage < 0.2.
+    """
+    mapping = user_config.get("mapping", {}) if isinstance(user_config, dict) else {}
+    power_entity = mapping.get("Power")
+
+    meta = {
+        "power_entity": power_entity,
+        "median_sample_seconds": None,
+        "coverage_ratio": None,
+        "low_res_days_ratio": None,
+        "low_res_day_count": None,
+        "total_day_count": None,
+        "high_res_day_count": None,
+        "high_res_threshold_per_day": 300,
+        "high_res_run_window_start": None,
+        "high_res_run_window_end": None,
+        "high_res_run_window_rows": None,
+        "is_sparse_power_sampling": False,
+    }
+
+    if not power_entity or grouped.empty:
+        return meta
+
+    power_rows = grouped[grouped["entity_id"] == power_entity]
+    if power_rows.empty:
+        return meta
+
+    ts = pd.to_datetime(power_rows[ts_col], errors="coerce").dropna().sort_values()
+    if len(ts) < 3:
+        return meta
+
+    deltas = ts.diff().dropna().dt.total_seconds()
+    if deltas.empty:
+        return meta
+
+    median_secs = float(deltas.median())
+    span_secs = (ts.iloc[-1] - ts.iloc[0]).total_seconds()
+    expected_minutes = max(1.0, span_secs / 60.0)
+    coverage_ratio = float(len(ts) / expected_minutes)
+
+    per_day_counts = ts.dt.floor("D").value_counts().sort_index()
+    low_res_days = (per_day_counts < 300).sum()  # ~5-min cadence or worse
+    total_days = len(per_day_counts)
+    low_res_ratio = float(low_res_days / total_days) if total_days else None
+
+    # High-resolution days (sufficient samples to run per-run analysis)
+    high_res_threshold = meta["high_res_threshold_per_day"]
+    high_res_days = [d for d, c in per_day_counts.items() if c >= high_res_threshold]
+    meta["high_res_day_count"] = len(high_res_days)
+
+    # Compute the first contiguous block of high-res days (assumes retention starts high-res then drops)
+    run_start_day = None
+    run_end_day = None
+    if high_res_days:
+        sorted_days = sorted(high_res_days)
+        run_start_day = sorted_days[0]
+        run_end_day = run_start_day
+        for day in sorted_days[1:]:
+            if (day - run_end_day) <= pd.Timedelta(days=1):
+                run_end_day = day
+            else:
+                break  # stop at first gap; we only use the initial high-res retention window
+
+    # If no high-res block exists, treat as sparse; otherwise keep runs enabled even if later days are low-res
+    is_sparse = False
+    if run_start_day is None:
+        is_sparse = (median_secs >= 45 * 60) or (coverage_ratio < 0.2) or (low_res_ratio is not None and low_res_ratio >= 0.5)
+
+    meta["median_sample_seconds"] = median_secs
+    meta["coverage_ratio"] = coverage_ratio
+    meta["low_res_days_ratio"] = low_res_ratio
+    meta["low_res_day_count"] = int(low_res_days)
+    meta["total_day_count"] = int(total_days)
+    if run_start_day is not None:
+        meta["high_res_run_window_start"] = run_start_day.isoformat()
+        # include full final day (up to 23:59)
+        run_end_ts = run_end_day + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
+        meta["high_res_run_window_end"] = run_end_ts.isoformat()
+    meta["is_sparse_power_sampling"] = is_sparse
+
+    return meta
+
+
+# ----------------------------------------------------------------------
 # MAIN ENTRY POINT
 # ----------------------------------------------------------------------
 
@@ -466,6 +565,11 @@ def process_ha_files(
     pivot_secs = time.time() - t_pivot
 
     # ------------------------------------------------------------------
+    # 6b. SAMPLING QUALITY CHECK (pre-resample)
+    # ------------------------------------------------------------------
+    sampling_meta = _infer_sampling_meta(grouped, ts_col, user_config)
+
+    # ------------------------------------------------------------------
     # 7. RESAMPLE TO 1-MINUTE
     # ------------------------------------------------------------------
     t_resample = time.time()
@@ -516,7 +620,47 @@ def process_ha_files(
     # 12. RUN DETECTOR + DAILY STATS
     # ------------------------------------------------------------------
     t_runs = time.time()
-    runs = processing.detect_runs(df_engine, user_config)
+    run_detection_disabled = False
+    runs = []
+
+    if sampling_meta.get("is_sparse_power_sampling"):
+        run_detection_disabled = True
+        try:
+            import sys
+            med = sampling_meta.get("median_sample_seconds")
+            cov = sampling_meta.get("coverage_ratio")
+            low = sampling_meta.get("low_res_day_count")
+            tot = sampling_meta.get("total_day_count")
+            med_str = f"{med:.0f}s" if med is not None else "unknown"
+            cov_str = f"{cov:.3f}" if cov is not None else "unknown"
+            low_str = f"{low}/{tot}" if low is not None and tot is not None else "unknown"
+            sys.stdout.write(
+                "[ha_loader] skipping run detection: sparse/hourly sampling "
+                f"(median={med_str} coverage={cov_str} low_res_days={low_str})\n"
+            )
+        except Exception:
+            pass
+    else:
+        run_df = df_engine
+        # If we have a high-res retention window, limit run detection to that period
+        start_str = sampling_meta.get("high_res_run_window_start")
+        end_str = sampling_meta.get("high_res_run_window_end")
+        if start_str and end_str:
+            start_ts = pd.to_datetime(start_str)
+            end_ts = pd.to_datetime(end_str)
+            try:
+                tz = run_df.index.tz
+                if tz is not None:
+                    if start_ts.tzinfo is None:
+                        start_ts = start_ts.tz_localize(tz)
+                    if end_ts.tzinfo is None:
+                        end_ts = end_ts.tz_localize(tz)
+            except Exception:
+                pass
+            run_df = run_df.loc[start_ts:end_ts]
+            sampling_meta["high_res_run_window_rows"] = int(len(run_df))
+        runs = processing.detect_runs(run_df, user_config) if not run_df.empty else []
+
     t_daily = time.time()
     daily = processing.get_daily_stats(df_engine)
     daily_secs = time.time() - t_daily
@@ -542,6 +686,8 @@ def process_ha_files(
         "raw_history": df,   # wide dataframe after interpretation, before physics
         "runs": runs,
         "daily": daily,
+        "sampling_meta": sampling_meta,
+        "run_detection_disabled": run_detection_disabled,
         "patterns": None,
         "baselines": None,
     }

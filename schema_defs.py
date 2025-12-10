@@ -60,10 +60,10 @@ OPTIONAL_SENSORS = {
         "description": "Current temperature of the hot water cylinder."
     },
     "DHW_Mode": {
-        "label": "DHW Active Mode (Signal)",
+        "label": "DHW Mode",
         "unit": "Text/Binary",
         "required": False,
-        "description": "State or Mode sensor indicating if DHW is currently active (e.g. 'DHW', 'On')."
+        "description": "DHW Mode e.g. Eco, Standard, Power."
     },
     "ValveMode": {
         "label": "3-Way Valve Position",
@@ -72,7 +72,7 @@ OPTIONAL_SENSORS = {
         "description": "Position of the diverter valve (e.g. 'Heating', 'DHW')."
     },
     "DHW_Active": {
-        "label": "DHW Active (Binary)",
+        "label": "DHW Active Status",
         "unit": "0/1",
         "required": False,
         "description": "Binary sensor specifically for DHW status (1=On)."
