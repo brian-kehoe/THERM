@@ -949,11 +949,16 @@ def render_configuration_interface(uploaded_files):
                         }
                     )
             if not rules_default:
+                # Default to full 24h coverage using the multi-band template
+                # (Night, EV, Night, Day, Peak, Day, Night)
                 rules_default = [
-                    {"name": "Off-peak", "start": "00:00", "end": "07:00", "rate": 0.15},
-                    {"name": "Day", "start": "07:00", "end": "17:00", "rate": 0.30},
-                    {"name": "Peak", "start": "17:00", "end": "20:00", "rate": 0.40},
-                    {"name": "Evening", "start": "20:00", "end": "24:00", "rate": 0.30},
+                    {"name": "Night",      "start": "00:00", "end": "02:00", "rate": 0.20},
+                    {"name": "Night (EV)", "start": "02:00", "end": "05:00", "rate": 0.075},
+                    {"name": "Night",      "start": "05:00", "end": "08:00", "rate": 0.20},
+                    {"name": "Day",        "start": "08:00", "end": "17:00", "rate": 0.33},
+                    {"name": "Peak",       "start": "17:00", "end": "19:00", "rate": 0.45},
+                    {"name": "Day",        "start": "19:00", "end": "23:00", "rate": 0.33},
+                    {"name": "Night",      "start": "23:00", "end": "24:00", "rate": 0.20},
                 ]
 
             rules_df = pd.DataFrame(rules_default)
