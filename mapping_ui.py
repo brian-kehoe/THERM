@@ -442,6 +442,8 @@ def render_configuration_interface(uploaded_files):
             profile_name = st.text_input("Profile Name", key="profile_name_input")
             if profile_loaded and loaded_profile_name:
                 st.success(f"Loaded {loaded_profile_name}")
+        # Keep defaults in sync with the current input value
+        defaults["profile_name"] = st.session_state.get("profile_name_input", defaults.get("profile_name", "My Heat Pump"))
 
         # Top action bar (will be sticky with CSS)
         action_bar_top = st.container()
