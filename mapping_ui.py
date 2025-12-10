@@ -690,7 +690,6 @@ def render_configuration_interface(uploaded_files):
                     "end": st.column_config.TextColumn("End (HH:MM)"),
                     "rate": st.column_config.NumberColumn("Rate (€/kWh)", format="%.3f", step=0.01, min_value=0.0),
                 },
-                help="Define time bands and rates; overnight wrap is supported.",
             )
 
             # Build tariff structure list
