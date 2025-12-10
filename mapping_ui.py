@@ -624,109 +624,170 @@ def render_configuration_interface(uploaded_files):
                 with col_input:
                     return st.number_input(label, **kwargs)
 
-            st.markdown("**Top-Level (Policy & Heuristics)**")
-            thresholds_cfg["minimum_run_duration_min"] = _narrow_number_input(
-                "Minimum run duration (min)",
-                value=float(_tval("minimum_run_duration_min", config.THRESHOLDS.get("minimum_run_duration_min", 5))),
-                help="Cycles shorter than this are ignored to filter out data noise.",
-                step=1.0,
-                min_value=0.0,
-            )
-            thresholds_cfg["short_cycle_min"] = _narrow_number_input(
-                "Short cycle threshold (min)",
-                value=float(_tval("short_cycle_min", config.THRESHOLDS.get("short_cycle_min", 20))),
-                help="Heating runs shorter than this are flagged as short cycles.",
-                step=1.0,
-                min_value=0.0,
-            )
-            thresholds_cfg["very_short_cycle_min"] = _narrow_number_input(
-                "Very short cycle threshold (min)",
-                value=float(_tval("very_short_cycle_min", config.THRESHOLDS.get("very_short_cycle_min", 10))),
-                help="Heating runs shorter than this are flagged as very short cycles.",
-                step=1.0,
-                min_value=0.0,
-            )
-            thresholds_cfg["dhw_scop_low"] = _narrow_number_input(
-                "Low DHW COP threshold",
-                value=float(_tval("dhw_scop_low", config.THRESHOLDS.get("dhw_scop_low", 2.2))),
-                help="COP threshold below which a DHW run is flagged as poor efficiency.",
-                step=0.1,
-                min_value=0.0,
-            )
-            thresholds_cfg["flow_over_43c_pct_high"] = _narrow_number_input(
-                "High flow temp share (%)",
-                value=float(_tval("flow_over_43c_pct_high", config.THRESHOLDS.get("flow_over_43c_pct_high", 20))),
-                help="Warn if flow temperature exceeds 43°C for more than this share of a run.",
-                step=1.0,
-                min_value=0.0,
-                max_value=100.0,
-            )
-            thresholds_cfg["heating_during_dhw_power_threshold"] = _narrow_number_input(
-                "Heating during DHW power threshold (W)",
-                value=float(_tval("heating_during_dhw_power_threshold", config.THRESHOLDS.get("heating_during_dhw_power_threshold", 120))),
-                help="Indoor power above this during DHW (with no zones) implies heating running during DHW.",
-                step=10.0,
-                min_value=0.0,
-            )
-            thresholds_cfg["heating_during_dhw_detection_pct"] = _narrow_number_input(
-                "Heating during DHW detection fraction",
-                value=float(_tval("heating_during_dhw_detection_pct", config.THRESHOLDS.get("heating_during_dhw_detection_pct", 0.15))),
-                help="Fraction of a DHW run that must show heating activity to trigger the warning (e.g., 0.15 = 15%).",
-                step=0.01,
-                min_value=0.0,
-                max_value=1.0,
-                fmt="%.2f",
-            )
-            thresholds_cfg["min_heating_run_minutes_with_no_zones"] = _narrow_number_input(
-                "Min heating minutes when zones unknown",
-                value=float(_tval("min_heating_run_minutes_with_no_zones", config.THRESHOLDS.get("min_heating_run_minutes_with_no_zones", 8))),
-                help="If no zone data, runs shorter than this are ignored to avoid phantom startups.",
-                step=1.0,
-                min_value=0.0,
-            )
-            thresholds_cfg["min_heating_run_heat_kwh_with_no_zones"] = _narrow_number_input(
-                "Min heating kWh when zones unknown",
-                value=float(_tval("min_heating_run_heat_kwh_with_no_zones", config.THRESHOLDS.get("min_heating_run_heat_kwh_with_no_zones", 0.25))),
-                help="If no zone data, runs with less heat than this are ignored to avoid phantom startups.",
-                step=0.05,
-                min_value=0.0,
-            )
-            thresholds_cfg["high_night_share"] = _narrow_number_input(
-                "High night-rate share (fraction)",
-                value=float(_tval("high_night_share", config.THRESHOLDS.get("high_night_share", 0.50))),
-                help="Night-rate share above this is considered high for load-shifting analysis.",
-                step=0.05,
-                min_value=0.0,
-                max_value=1.0,
-                fmt="%.2f",
-            )
+            # Group 1: Basic Run Detection (Power only)
+            with st.expander("Basic Run Detection (Power)", expanded=True):
+                thresholds_cfg["minimum_run_duration_min"] = _narrow_number_input(
+                    "Minimum run duration (min)",
+                    value=float(_tval("minimum_run_duration_min", config.THRESHOLDS.get("minimum_run_duration_min", 5))),
+                    help="Cycles shorter than this are ignored as noise.",
+                    step=1.0,
+                    min_value=0.0,
+                )
+                thresholds_cfg["short_cycle_min"] = _narrow_number_input(
+                    "Short cycle threshold (min)",
+                    value=float(_tval("short_cycle_min", config.THRESHOLDS.get("short_cycle_min", 20))),
+                    help="Heating runs shorter than this are flagged as short cycles.",
+                    step=1.0,
+                    min_value=0.0,
+                )
+                thresholds_cfg["very_short_cycle_min"] = _narrow_number_input(
+                    "Very short cycle threshold (min)",
+                    value=float(_tval("very_short_cycle_min", config.THRESHOLDS.get("very_short_cycle_min", 10))),
+                    help="Heating runs shorter than this are flagged as critical short cycles.",
+                    step=1.0,
+                    min_value=0.0,
+                )
+                physics_cfg["power_on_W"] = _narrow_number_input(
+                    "Power on threshold (W)",
+                    value=float(_pval("power_on_W", config.ENGINE_STATE_THRESHOLDS.get("power_on_W", 300.0))),
+                    help="Minimum electrical power required to consider the unit active.",
+                    step=10.0,
+                    min_value=0.0,
+                )
+                physics_cfg["coast_down_window_min"] = _narrow_number_input(
+                    "Coast-down lookback (min)",
+                    value=float(_pval("coast_down_window_min", config.ENGINE_STATE_THRESHOLDS.get("coast_down_window_min", 5))),
+                    help="Minutes to look back to decide if a run is coasting after power drops.",
+                    step=1.0,
+                    min_value=0.0,
+                )
 
-            with st.expander("Advanced Engine & Physics", expanded=False):
+            # Group 2: Hydraulics & Efficiency (Flow/Temps)
+            with st.expander("Hydraulics & Efficiency (Flow/Temps)", expanded=False):
+                physics_cfg["min_flow_rate_lpm"] = _narrow_number_input(
+                    "Min flow rate to count water movement (L/min)",
+                    value=float(_pval("min_flow_rate_lpm", config.PHYSICS_THRESHOLDS.get("min_flow_rate_lpm", 3.0))),
+                    help="Heat output forced to 0 if flow is below this value (filters idle noise).",
+                    step=0.1,
+                    min_value=0.0,
+                )
                 thresholds_cfg["flow_limit_tolerance"] = _narrow_number_input(
                     "Flow limit tolerance (°C)",
                     value=float(_tval("flow_limit_tolerance", config.THRESHOLDS.get("flow_limit_tolerance", 2.0))),
-                    help="Allowed gap between target and actual flow temperature before flagging flow limit.",
+                    help="Gap allowed between target and actual flow before flagging a flow limit issue.",
                     step=0.1,
                     min_value=0.0,
                 )
                 thresholds_cfg["flow_limit_min_duration"] = _narrow_number_input(
                     "Flow limit minimum duration (min)",
                     value=float(_tval("flow_limit_min_duration", config.THRESHOLDS.get("flow_limit_min_duration", 15))),
-                    help="Minutes the system must be flow-limited before flagging.",
+                    help="Duration required to trigger a flow limit warning.",
                     step=1.0,
                     min_value=0.0,
+                )
+                physics_cfg["delta_on_C"] = _narrow_number_input(
+                    "DeltaT on threshold (°C)",
+                    value=float(_pval("delta_on_C", config.ENGINE_STATE_THRESHOLDS.get("delta_on_C", 1.0))),
+                    help="Minimum DeltaT required to confirm active heating.",
+                    step=0.1,
+                    min_value=0.0,
+                )
+                thresholds_cfg["dhw_scop_low"] = _narrow_number_input(
+                    "Low DHW COP threshold",
+                    value=float(_tval("dhw_scop_low", config.THRESHOLDS.get("dhw_scop_low", 2.2))),
+                    help="DHW runs with efficiency below this are flagged as poor.",
+                    step=0.1,
+                    min_value=0.0,
+                )
+
+            # Group 3: Advanced Diagnostics (Optional sensors)
+            with st.expander("Advanced Diagnostics (Optional sensors)", expanded=False):
+                thresholds_cfg["heating_during_dhw_power_threshold"] = _narrow_number_input(
+                    "Heating during DHW power threshold (W)",
+                    value=float(_tval("heating_during_dhw_power_threshold", config.THRESHOLDS.get("heating_during_dhw_power_threshold", 120))),
+                    help="Indoor power above this during DHW (with no zones) implies heating running during DHW.",
+                    step=10.0,
+                    min_value=0.0,
+                )
+                thresholds_cfg["heating_during_dhw_detection_pct"] = _narrow_number_input(
+                    "Heating during DHW detection fraction",
+                    value=float(_tval("heating_during_dhw_detection_pct", config.THRESHOLDS.get("heating_during_dhw_detection_pct", 0.15))),
+                    help="Fraction of a DHW run that must show heating activity to trigger the warning (e.g., 0.15 = 15%).",
+                    step=0.01,
+                    min_value=0.0,
+                    max_value=1.0,
+                    fmt="%.2f",
                 )
                 thresholds_cfg["hdd_base_temp"] = _narrow_number_input(
                     "Heating degree day base temp (°C)",
                     value=float(_tval("hdd_base_temp", config.THRESHOLDS.get("hdd_base_temp", 18.0))),
-                    help="Outdoor temperature baseline for HDD calculations.",
+                    help="Base temperature for heating degree day calculations.",
                     step=0.5,
                 )
-
-                physics_cfg["min_flow_rate_lpm"] = _narrow_number_input(
-                    "Min flow rate to count water movement (L/min)",
-                    value=float(_pval("min_flow_rate_lpm", config.PHYSICS_THRESHOLDS.get("min_flow_rate_lpm", 3.0))),
-                    help="Heat output forced to 0 if flow is below this value (filters idle noise).",
+                physics_cfg["freq_on_hz"] = _narrow_number_input(
+                    "Freq on threshold (Hz)",
+                    value=float(_pval("freq_on_hz", config.ENGINE_STATE_THRESHOLDS.get("freq_on_hz", 10.0))),
+                    help="Compressor frequency above this is considered active.",
+                    step=0.5,
+                    min_value=0.0,
+                )
+                physics_cfg["freq_off_hz"] = _narrow_number_input(
+                    "Freq off threshold (Hz)",
+                    value=float(_pval("freq_off_hz", config.ENGINE_STATE_THRESHOLDS.get("freq_off_hz", 5.0))),
+                    help="Compressor frequency below this is considered inactive.",
+                    step=0.5,
+                    min_value=0.0,
+                )
+                thresholds_cfg["flow_over_43c_pct_high"] = _narrow_number_input(
+                    "High flow temp share (%)",
+                    value=float(_tval("flow_over_43c_pct_high", config.THRESHOLDS.get("flow_over_43c_pct_high", 20))),
+                    help="Warn if flow temperature exceeds 43°C for more than this share of a run.",
+                    step=1.0,
+                    min_value=0.0,
+                    max_value=100.0,
+                )
+                thresholds_cfg["min_heating_run_minutes_with_no_zones"] = _narrow_number_input(
+                    "Min heating minutes when zones unknown",
+                    value=float(_tval("min_heating_run_minutes_with_no_zones", config.THRESHOLDS.get("min_heating_run_minutes_with_no_zones", 8))),
+                    help="If no zone data, runs shorter than this are ignored to avoid phantom startups.",
+                    step=1.0,
+                    min_value=0.0,
+                )
+                thresholds_cfg["min_heating_run_heat_kwh_with_no_zones"] = _narrow_number_input(
+                    "Min heating kWh when zones unknown",
+                    value=float(_tval("min_heating_run_heat_kwh_with_no_zones", config.THRESHOLDS.get("min_heating_run_heat_kwh_with_no_zones", 0.25))),
+                    help="If no zone data, runs with less heat than this are ignored to avoid phantom startups.",
+                    step=0.05,
+                    min_value=0.0,
+                )
+                thresholds_cfg["high_night_share"] = _narrow_number_input(
+                    "High night-rate share (fraction)",
+                    value=float(_tval("high_night_share", config.THRESHOLDS.get("high_night_share", 0.50))),
+                    help="Night-rate share above this is considered high for load-shifting analysis.",
+                    step=0.05,
+                    min_value=0.0,
+                    max_value=1.0,
+                    fmt="%.2f",
+                )
+                # Additional engine/physics tuning (keep available for power users)
+                physics_cfg["flow_on_lpm"] = _narrow_number_input(
+                    "Flow on threshold (L/min)",
+                    value=float(_pval("flow_on_lpm", config.ENGINE_STATE_THRESHOLDS.get("flow_on_lpm", 2.0))),
+                    help="Flow rate above this implies pump running (fallback detection).",
+                    step=0.1,
+                    min_value=0.0,
+                )
+                physics_cfg["flow_off_lpm"] = _narrow_number_input(
+                    "Flow off threshold (L/min)",
+                    value=float(_pval("flow_off_lpm", config.ENGINE_STATE_THRESHOLDS.get("flow_off_lpm", 1.0))),
+                    help="Flow rate below this implies pump off (fallback detection).",
+                    step=0.1,
+                    min_value=0.0,
+                )
+                physics_cfg["delta_coast_min_C"] = _narrow_number_input(
+                    "DeltaT coast threshold (°C)",
+                    value=float(_pval("delta_coast_min_C", config.ENGINE_STATE_THRESHOLDS.get("delta_coast_min_C", 0.5))),
+                    help="DeltaT threshold to consider a run coasting after compressor stop.",
                     step=0.1,
                     min_value=0.0,
                 )
@@ -756,64 +817,6 @@ def render_configuration_interface(uploaded_files):
                     value=float(_pval("min_valid_delta_t", config.PHYSICS_THRESHOLDS.get("min_valid_delta_t", 0.2))),
                     help="DeltaT below this is treated as noise and ignored.",
                     step=0.05,
-                    min_value=0.0,
-                )
-
-                # Engine state detection (optional tuning)
-                physics_cfg["freq_on_hz"] = _narrow_number_input(
-                    "Freq on threshold (Hz)",
-                    value=float(_pval("freq_on_hz", config.ENGINE_STATE_THRESHOLDS.get("freq_on_hz", 10.0))),
-                    help="Compressor frequency above this is considered active.",
-                    step=0.5,
-                    min_value=0.0,
-                )
-                physics_cfg["freq_off_hz"] = _narrow_number_input(
-                    "Freq off threshold (Hz)",
-                    value=float(_pval("freq_off_hz", config.ENGINE_STATE_THRESHOLDS.get("freq_off_hz", 5.0))),
-                    help="Compressor frequency below this is considered inactive.",
-                    step=0.5,
-                    min_value=0.0,
-                )
-                physics_cfg["flow_on_lpm"] = _narrow_number_input(
-                    "Flow on threshold (L/min)",
-                    value=float(_pval("flow_on_lpm", config.ENGINE_STATE_THRESHOLDS.get("flow_on_lpm", 2.0))),
-                    help="Flow rate above this implies pump running (fallback detection).",
-                    step=0.1,
-                    min_value=0.0,
-                )
-                physics_cfg["flow_off_lpm"] = _narrow_number_input(
-                    "Flow off threshold (L/min)",
-                    value=float(_pval("flow_off_lpm", config.ENGINE_STATE_THRESHOLDS.get("flow_off_lpm", 1.0))),
-                    help="Flow rate below this implies pump off (fallback detection).",
-                    step=0.1,
-                    min_value=0.0,
-                )
-                physics_cfg["delta_on_C"] = _narrow_number_input(
-                    "DeltaT on threshold (°C)",
-                    value=float(_pval("delta_on_C", config.ENGINE_STATE_THRESHOLDS.get("delta_on_C", 1.0))),
-                    help="DeltaT required to consider active heating.",
-                    step=0.1,
-                    min_value=0.0,
-                )
-                physics_cfg["delta_coast_min_C"] = _narrow_number_input(
-                    "DeltaT coast threshold (°C)",
-                    value=float(_pval("delta_coast_min_C", config.ENGINE_STATE_THRESHOLDS.get("delta_coast_min_C", 0.5))),
-                    help="DeltaT threshold to consider a run coasting after compressor stop.",
-                    step=0.1,
-                    min_value=0.0,
-                )
-                physics_cfg["power_on_W"] = _narrow_number_input(
-                    "Power on threshold (W)",
-                    value=float(_pval("power_on_W", config.ENGINE_STATE_THRESHOLDS.get("power_on_W", 300.0))),
-                    help="Minimum electrical power to consider the unit active.",
-                    step=10.0,
-                    min_value=0.0,
-                )
-                physics_cfg["coast_down_window_min"] = _narrow_number_input(
-                    "Coast-down lookback (min)",
-                    value=float(_pval("coast_down_window_min", config.ENGINE_STATE_THRESHOLDS.get("coast_down_window_min", 5))),
-                    help="Minutes to look back to decide if a run is coasting down.",
-                    step=1.0,
                     min_value=0.0,
                 )
 
