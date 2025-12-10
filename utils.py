@@ -14,7 +14,7 @@ __all__ = [
 ]
 
 # Lightweight logging helpers
-LOG_VERBOSE = True
+LOG_VERBOSE = False
 
 def _log_warn(msg):
     if LOG_VERBOSE:
