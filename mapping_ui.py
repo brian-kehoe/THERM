@@ -1,6 +1,7 @@
 # mapping_ui.py
 import csv
 import json
+import math
 import time
 from datetime import datetime
 
@@ -253,28 +254,36 @@ def render_configuration_interface(uploaded_files):
             return False, "Tariff rules are empty."
         covered = [False] * (24 * 60)
 
-        def _parse_minutes(val: str) -> int | None:
+        def _parse_seconds(val: str) -> int | None:
             try:
-                s = str(val)
-                if s in ("24:00", "24:00:00"):
-                    return 24 * 60
-                t = pd.to_datetime(s, errors="coerce").time()
-                return t.hour * 60 + t.minute
+                s = str(val).strip()
+                if not s:
+                    return None
+                if s in ("24:00", "24:00:00", "24"):
+                    # Normalise user-entered 24:00 to the final second of the day
+                    return 24 * 3600
+                t = pd.to_datetime(s, errors="coerce")
+                if pd.isna(t):
+                    return None
+                t = t.to_pydatetime().time()
+                return t.hour * 3600 + t.minute * 60 + t.second
             except Exception:
                 return None
 
         for r in rules:
-            s_min = _parse_minutes(r.get("start", "00:00"))
-            e_min = _parse_minutes(r.get("end", "00:00"))
+            s_sec = _parse_seconds(r.get("start", "00:00"))
+            e_sec = _parse_seconds(r.get("end", "00:00"))
             try:
                 float(r.get("rate", 0))
             except Exception:
                 return False, f"Invalid rate in tariff rule: {r}"
-            if s_min is None or e_min is None:
+            if s_sec is None or e_sec is None:
                 return False, f"Invalid time in tariff rule: {r}"
-            if e_min <= s_min:
-                e_min += 24 * 60
-            for m in range(s_min, e_min):
+            if e_sec <= s_sec:
+                e_sec += 24 * 3600
+            start_min = s_sec // 60
+            end_min = math.ceil(e_sec / 60)
+            for m in range(start_min, end_min):
                 covered[m % (24 * 60)] = True
 
         if not all(covered):
@@ -954,7 +963,7 @@ def render_configuration_interface(uploaded_files):
             if not rules_default or (
                 len(rules_default) == 1
                 and str(rules_default[0].get("start")) in ("00:00", "00:00:00")
-                and str(rules_default[0].get("end")) in ("24:00", "24:00:00")
+                and str(rules_default[0].get("end")) in ("23:59", "23:59:59", "24:00", "24:00:00")
             ):
                 rules_default = [
                     {"name": "Night",      "start": "00:00", "end": "02:00", "rate": 0.20},
@@ -963,7 +972,7 @@ def render_configuration_interface(uploaded_files):
                     {"name": "Day",        "start": "08:00", "end": "17:00", "rate": 0.33},
                     {"name": "Peak",       "start": "17:00", "end": "19:00", "rate": 0.45},
                     {"name": "Day",        "start": "19:00", "end": "23:00", "rate": 0.33},
-                    {"name": "Night",      "start": "23:00", "end": "24:00", "rate": 0.20},
+                    {"name": "Night",      "start": "23:00", "end": "23:59:59", "rate": 0.20},
                 ]
 
             rules_df = pd.DataFrame(rules_default)
@@ -986,11 +995,15 @@ def render_configuration_interface(uploaded_files):
                     rate_val = float(row.get("rate", 0.0))
                 except Exception:
                     rate_val = 0.0
+                start_val = str(row.get("start", "00:00")).strip()
+                end_val = str(row.get("end", "00:00")).strip()
+                if end_val in ("24:00", "24:00:00", "24"):
+                    end_val = "23:59:59"
                 rules_list.append(
                     {
                         "name": str(row.get("name", "")),
-                        "start": str(row.get("start", "00:00")),
-                        "end": str(row.get("end", "00:00")),
+                        "start": start_val,
+                        "end": end_val,
                         "rate": rate_val,
                     }
                     )
@@ -1103,5 +1116,4 @@ def render_config_download(config: dict) -> None:
         type="secondary",
         key=f"save_btn_{profile_name.replace(' ', '_')}",
     )
-
 

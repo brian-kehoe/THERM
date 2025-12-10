@@ -42,6 +42,57 @@ def _build_system_context(user_config: dict | None, include_heating_note: bool) 
     return "\n".join(parts) if parts else "No additional system context supplied."
 
 
+def _build_tariff_summary(user_config: dict | None) -> dict:
+    """Return a structured tariff summary for AI exports."""
+    summary: dict = {}
+    if not isinstance(user_config, dict):
+        return summary
+
+    currency = user_config.get("currency", "€")
+    tariff = user_config.get("tariff_structure")
+
+    if isinstance(tariff, dict):
+        day_rate = tariff.get("day_rate")
+        night_rate = tariff.get("night_rate", day_rate)
+        night_start = tariff.get("night_start", "00:00")
+        night_end = tariff.get("night_end", "07:00")
+        if night_rate is None or day_rate == night_rate:
+            summary = {
+                "mode": "Flat",
+                "currency": currency,
+                "rate": day_rate if day_rate is not None else night_rate,
+            }
+        else:
+            summary = {
+                "mode": "Day/Night",
+                "currency": currency,
+                "day_rate": day_rate,
+                "night_rate": night_rate,
+                "night_start": night_start,
+                "night_end": night_end,
+            }
+    elif isinstance(tariff, list) and tariff:
+        first = tariff[0] or {}
+        rules_out: list[dict] = []
+        for r in first.get("rules", []) or []:
+            rules_out.append(
+                {
+                    "name": r.get("name"),
+                    "start": r.get("start"),
+                    "end": r.get("end"),
+                    "rate": r.get("rate"),
+                }
+            )
+        summary = {
+            "mode": "Custom bands",
+            "currency": currency,
+            "valid_from": first.get("valid_from"),
+            "name": first.get("name"),
+            "rules": rules_out,
+        }
+
+    return summary
+
 def render_long_term_trends(daily_df: pd.DataFrame, raw_df: pd.DataFrame, runs_list: list, user_config: dict | None = None) -> None:
     """
     Long-term performance view:
@@ -428,6 +479,27 @@ def render_long_term_trends(daily_df: pd.DataFrame, raw_df: pd.DataFrame, runs_l
             )
         json_ready["date"] = json_ready["date"].astype(str)
 
+        # Drop columns that are entirely NaN to reduce noise in AI payloads
+        json_ready = json_ready.dropna(axis=1, how="all")
+
+        # Drop metric columns whose counts are zero for the entire period
+        drop_cols: set[str] = set()
+        for col in list(json_ready.columns):
+            if col.endswith("_count"):
+                try:
+                    total = float(json_ready[col].fillna(0).sum())
+                except Exception:
+                    continue
+                if total == 0:
+                    drop_cols.add(col)
+                    base = col[: -len("_count")]
+                    for suffix in ("_mean", "_min", "_max"):
+                        cand = f"{base}{suffix}"
+                        if cand in json_ready.columns:
+                            drop_cols.add(cand)
+        if drop_cols:
+            json_ready = json_ready.drop(columns=list(drop_cols), errors="ignore")
+
         float_cols = json_ready.select_dtypes(include=[float]).columns
         json_ready[float_cols] = json_ready[float_cols].round(2)
 
@@ -443,6 +515,13 @@ def render_long_term_trends(daily_df: pd.DataFrame, raw_df: pd.DataFrame, runs_l
             bool(r.get("heating_during_dhw_detected")) for r in runs_list or []
         )
 
+        # Preserve user-supplied AI context entries (empty strings removed upstream)
+        ai_context_inputs = {}
+        if isinstance(user_config, dict):
+            ai_context_inputs = {
+                k: v for k, v in (user_config.get("ai_context") or {}).items() if isinstance(v, str) and v.strip()
+            }
+
         ai_payload = {
             "meta": {
                 "report_type": "LONG_TERM_TRENDS",
@@ -450,6 +529,8 @@ def render_long_term_trends(daily_df: pd.DataFrame, raw_df: pd.DataFrame, runs_l
                 "calc_version": CALC_VERSION,
             },
             "system_context": _build_system_context(user_config, include_heating_note),
+            "tariff_summary": _build_tariff_summary(user_config),
+            "ai_context": ai_context_inputs,
             "period_summary": period_summary,
             "daily_metrics": json_ready.to_dict(orient="records"),
         }
