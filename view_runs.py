@@ -285,7 +285,14 @@ def render_run_inspector(df, runs_list):
                 margin=dict(l=10, r=10, t=30, b=10),
                 height=200,
                 hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                showlegend=True,
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.12,
+                    xanchor="left",
+                    x=0,
+                ),
             )
             st.plotly_chart(fig_dt, use_container_width=True, key="run_hydro_dt")
 
@@ -305,7 +312,14 @@ def render_run_inspector(df, runs_list):
                 margin=dict(l=10, r=10, t=30, b=10),
                 height=200,
                 hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                showlegend=True,
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.12,
+                    xanchor="left",
+                    x=0,
+                ),
             )
             st.plotly_chart(fig_flow, use_container_width=True, key="run_hydro_flow")
 
@@ -375,7 +389,14 @@ def render_run_inspector(df, runs_list):
                 margin=dict(l=10, r=10, t=30, b=10),
                 height=max(220, 140 + 20 * len(ordered_keys)),
                 hovermode="x unified",
-                legend=dict(orientation="v", yanchor="top", y=1, xanchor="right", x=1),
+                showlegend=True,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.08,
+                    xanchor="left",
+                    x=0,
+                ),
             )
             st.plotly_chart(fig_zones, use_container_width=True, key="run_hydro_zones")
 
@@ -405,7 +426,14 @@ def render_run_inspector(df, runs_list):
                 margin=dict(l=10, r=10, t=30, b=10),
                 height=220,
                 hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                showlegend=True,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.08,
+                    xanchor="left",
+                    x=0,
+                ),
             )
             st.plotly_chart(fig_temp, use_container_width=True, key="run_hydro_temps")
 
