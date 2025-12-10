@@ -75,8 +75,8 @@ st.markdown(
     /* Slightly reduced padding without clipping titles */
     .block-container { padding-top: 1.5rem !important; }
     [data-testid="stSidebar"] .block-container { padding-top: 0.75rem !important; }
-    /* Nudge sidebar logo upward a bit more */
-    [data-testid="stSidebar"] img { margin-top: -22px !important; }
+    /* Nudge sidebar logo upward a bit more and center it */
+    [data-testid="stSidebar"] img { margin-top: -22px !important; display: block !important; margin-left: auto !important; margin-right: auto !important; }
     /* Move the sidebar tagline only */
     .sidebar-tagline { margin-top: -30px !important; display: block; }
     /* Sticky wrapper for System Setup header + actions */
@@ -87,6 +87,10 @@ st.markdown(
         background: inherit;
         padding-bottom: 0.5rem;
         box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+    }
+    /* Reduce spacing after radio button in sidebar */
+    [data-testid="stSidebar"] [data-testid="stRadio"] {
+        margin-bottom: -2rem !important;
     }
     </style>
     """,
@@ -107,7 +111,9 @@ if "csv_uploader_version" not in st.session_state:
 
 
 # === SIDEBAR HEADER ===
-st.sidebar.image("assets/therm_logo.png", width="stretch")
+col1, col2, col3 = st.sidebar.columns([0.5, 3, 0.5])
+with col2:
+    st.image("assets/therm_logo.png")
 st.sidebar.markdown(
     "<div class='sidebar-tagline'><strong>Thermal Health & Efficiency Reporting Module v2 beta</strong></div><div style='height:10px'></div>",
     unsafe_allow_html=True,
@@ -529,12 +535,48 @@ if uploaded_files:
 
                 # --- Global Stats (GREEN BLOCK ONLY, shared between LT Trends + Run Inspector) ---
                 if data and mode in ("Long-Term Trends", "Run Inspector"):
+                    st.markdown(
+                        """
+                        <style>
+                        /* Scope to the Global Stats section to avoid side effects */
+                        [data-testid="stSidebar"] .global-stats h3 {
+                            margin-top: 0;
+                            margin-bottom: 0.2rem;
+                        }
+                        [data-testid="stSidebar"] .global-stats [data-testid="stMetric"] {
+                            margin-top: -14px;
+                            margin-bottom: -14px;
+                            padding-top: 0;
+                            padding-bottom: 0;
+                        }
+                        [data-testid="stSidebar"] .global-stats [data-testid="stMetric"]:first-of-type {
+                            margin-top: -4px;
+                        }
+                        [data-testid="stSidebar"] .global-stats [data-testid="stMetricLabel"] div {
+                            margin-bottom: -16px;
+                        }
+                        [data-testid="stSidebar"] .global-stats [data-testid="stMetricValue"] div {
+                            margin-bottom: -18px;
+                            line-height: 0.96;
+                        }
+                        .global-stats-caption {
+                            margin-top: -24px;
+                            margin-bottom: -22px;
+                            font-size: 12px;
+                            color: #5c5c5c;
+                        }
+                        </style>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                    st.markdown("<div class='global-stats' style='margin-top: -2rem;'>", unsafe_allow_html=True)
                     st.markdown("### Global Stats")
 
                     # Runs Detected as headline
                     st.metric("Runs Detected", f"{runs_detected}")
                     st.markdown(
-                        f"<div style='margin-top:-25px; font-size:12px; color:#5c5c5c;'>Heating: {heating_runs} runs | DHW: {dhw_runs} runs</div>",
+                        f"<div class='global-stats-caption'>Heating: {heating_runs} runs | DHW: {dhw_runs} runs</div>",
                         unsafe_allow_html=True,
                     )
 
@@ -542,6 +584,7 @@ if uploaded_files:
                     st.metric("Total Heat Output", f"{total_heat:.1f} kWh")
                     st.metric("Total Electricity Input", f"{total_elec:.1f} kWh")
                     st.metric("Global COP", f"{global_cop:.2f}")
+                    st.markdown("</div>", unsafe_allow_html=True)
 
                 # Back to System Setup instead of Change Profile / Remap here
                 if st.button("↩ Back to System Setup"):
