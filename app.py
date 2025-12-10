@@ -489,6 +489,14 @@ if uploaded_files:
                 if entities:
                     st.code("\n".join(entities))
 
+                ranges = info.get("entity_date_ranges") or {}
+                if ranges:
+                    st.markdown("**Entity Date Ranges:**")
+                    st.dataframe(
+                        pd.DataFrame.from_dict(ranges, orient="index"),
+                        width="stretch",
+                    )
+
                 # Optional: show raw column list
                 cols = info.get("columns_raw", [])
                 if cols:

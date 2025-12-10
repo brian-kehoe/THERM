@@ -443,11 +443,11 @@ def apply_gatekeepers(df: pd.DataFrame, user_config: dict | None = None) -> pd.D
     for col in ffill_cols:
         if col in d.columns:
             # For on-change state signals, keep last known value for up to 12 hours (720 minutes)
-            d[col] = d[col].fillna(method="ffill", limit=720)
+            d[col] = d[col].ffill(limit=720)
 
     # Forward-fill textual ValveMode labels over the same horizon
     if "ValveMode" in d.columns:
-        d["ValveMode"] = d["ValveMode"].fillna(method="ffill", limit=720)
+        d["ValveMode"] = d["ValveMode"].ffill(limit=720)
 
     # --- Valve evidence (primary) -------------------------------------------
     valve_dhw_mask = pd.Series(False, index=idx)
@@ -755,8 +755,8 @@ def detect_runs(df: pd.DataFrame, user_config: dict | None = None) -> list[dict]
         # Ghost pumping during DHW
         heating_during_dhw_pct = None
         heating_during_dhw_detected = None
-        ghost_pumping_power_detected = None
-        ghost_detection_source = "none"
+        heating_during_dhw_power_detected = None
+        heating_during_dhw_detection_source = "none"
         if run_type == "DHW":
             # Prefer direct zone signals if available
             if zone_cols:
@@ -767,17 +767,17 @@ def detect_runs(df: pd.DataFrame, user_config: dict | None = None) -> list[dict]
                 )
                 heating_during_dhw_pct = float(zone_on_pct)
                 heating_during_dhw_detected = zone_on_pct >= 0.15
-                ghost_detection_source = "zones"
+                heating_during_dhw_detection_source = "zones"
             # Fallback: indoor power proxy if no zone signals
             elif "Indoor_Power" in group.columns:
-                ghost_threshold = THRESHOLDS.get("ghost_power_threshold", 120)
+                power_threshold = THRESHOLDS.get("heating_during_dhw_power_threshold", 120)
                 power_series = pd.to_numeric(group["Indoor_Power"], errors="coerce").fillna(0)
-                ghost_power_pct = (
-                    float((power_series > ghost_threshold).mean()) if len(power_series) > 0 else 0.0
+                power_over_threshold_pct = (
+                    float((power_series > power_threshold).mean()) if len(power_series) > 0 else 0.0
                 )
-                heating_during_dhw_pct = ghost_power_pct
-                ghost_pumping_power_detected = ghost_power_pct >= 0.15
-                ghost_detection_source = "power"
+                heating_during_dhw_pct = power_over_threshold_pct
+                heating_during_dhw_power_detected = power_over_threshold_pct >= 0.15
+                heating_during_dhw_detection_source = "power"
 
         # DHW Temperature Profile (DHW runs only)
         dhw_temp_start = None
@@ -906,12 +906,12 @@ def detect_runs(df: pd.DataFrame, user_config: dict | None = None) -> list[dict]
                     if heating_during_dhw_detected is not None
                     else None
                 ),
-                "ghost_pumping_power_detected": (
-                    bool(ghost_pumping_power_detected)
-                    if ghost_pumping_power_detected is not None
+                "heating_during_dhw_power_detected": (
+                    bool(heating_during_dhw_power_detected)
+                    if heating_during_dhw_power_detected is not None
                     else None
                 ),
-                "ghost_detection_source": ghost_detection_source,
+                "heating_during_dhw_detection_source": heating_during_dhw_detection_source,
                 # DHW Temperature Profile
                 "dhw_temp_start": dhw_temp_start,
                 "dhw_temp_end": dhw_temp_end,

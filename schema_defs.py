@@ -83,7 +83,7 @@ OPTIONAL_SENSORS = {
         "label": "Indoor Unit Power (optional)",
         "unit": "W",
         "required": False,
-        "description": "Indoor unit / compressor cabinet power draw, used as a proxy for immersion & ghost pumping."
+        "description": "Indoor unit / compressor cabinet power draw, used as a proxy for immersion and heating during DHW."
     },
 
     # NEW: direct heat-output sensor

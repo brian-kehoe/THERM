@@ -83,10 +83,10 @@ def inspect_raw_files(uploaded_files):
 
             if ts_col:
                 try:
-                    start_ts = pd.to_datetime(df_raw[ts_col].iloc[0], errors="coerce")
-                    end_ts   = pd.to_datetime(df_raw[ts_col].iloc[-1], errors="coerce")
-                    file_stat["Start Time"] = str(start_ts)
-                    file_stat["End Time"]   = str(end_ts)
+                    start_ts = pd.to_datetime(df_raw[ts_col].iloc[0], errors="coerce", dayfirst=True)
+                    end_ts   = pd.to_datetime(df_raw[ts_col].iloc[-1], errors="coerce", dayfirst=True)
+                    file_stat["Start Time"] = start_ts.strftime("%d-%m-%Y %H:%M") if not pd.isna(start_ts) else "Parse Error"
+                    file_stat["End Time"]   = end_ts.strftime("%d-%m-%Y %H:%M") if not pd.isna(end_ts) else "Parse Error"
                 except:
                     file_stat["Start Time"] = "Parse Error"
                     file_stat["End Time"]   = "Parse Error"
@@ -96,19 +96,55 @@ def inspect_raw_files(uploaded_files):
 
             cols_lower = [str(c).lower() for c in df_raw.columns]
 
+            # Optional timestamp column for date range per entity
+            ts_col = next(
+                (c for c in df_raw.columns if any(x in c.lower() for x in
+                ["time", "date", "timestamp", "last_changed", "last_updated"])),
+                None
+            )
+            ts_series = pd.to_datetime(df_raw[ts_col], errors="coerce", dayfirst=True) if ts_col else None
+
+            def _fmt_ts(ts_val):
+                if ts_val is None or pd.isna(ts_val):
+                    return None
+                return ts_val.strftime("%d-%m-%Y %H:%M")
+
+            entity_date_ranges: dict[str, dict[str, str]] = {}
+
             if "entity_id" in cols_lower:
                 structure = "Long Format (State)"
                 e_col = df_raw.columns[cols_lower.index("entity_id")]
                 entities = sorted(df_raw[e_col].dropna().astype(str).unique().tolist())
+                # Per-entity date ranges (long format)
+                if ts_series is not None and len(ts_series.dropna()) > 0:
+                    for ent in entities:
+                        mask = df_raw[e_col].astype(str) == ent
+                        ts_ent = ts_series[mask].dropna()
+                        if len(ts_ent) > 0:
+                            entity_date_ranges[ent] = {
+                                "start": _fmt_ts(ts_ent.min()),
+                                "end": _fmt_ts(ts_ent.max()),
+                            }
             else:
                 structure = "Wide Format (Table)"
                 ignore = ["time","timestamp","last_changed","last_updated","value","series"]
                 entities = [c for c in df_raw.columns if c.lower() not in ignore]
+                # Per-entity date ranges (wide format)
+                if ts_series is not None and len(ts_series.dropna()) > 0:
+                    for col in entities:
+                        mask = df_raw[col].notna() & (df_raw[col].astype(str).str.lower() != "unavailable")
+                        ts_ent = ts_series[mask].dropna()
+                        if len(ts_ent) > 0:
+                            entity_date_ranges[col] = {
+                                "start": _fmt_ts(ts_ent.min()),
+                                "end": _fmt_ts(ts_ent.max()),
+                            }
 
             file_details[uploaded_file.name] = {
                 "structure": structure,
                 "columns_raw": list(df_raw.columns),
                 "entities_found": entities,
+                "entity_date_ranges": entity_date_ranges,
             }
 
         except Exception as e:

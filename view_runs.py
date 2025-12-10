@@ -193,7 +193,7 @@ def render_run_inspector(df, runs_list):
 
             if r.get("heating_during_dhw_detected") or r.get(
 
-                "ghost_pumping_power_detected"
+                "heating_during_dhw_power_detected"
 
             ):
 
@@ -209,7 +209,7 @@ def render_run_inspector(df, runs_list):
 
 
 
-        # For DHW runs, hide zone info unless heating/ghost pumping was detected.
+        # For DHW runs, hide zone info unless heating during DHW was detected.
 
         show_zone = (
 
@@ -221,7 +221,7 @@ def render_run_inspector(df, runs_list):
 
                 or r.get("heating_during_dhw_detected")
 
-                or r.get("ghost_pumping_power_detected")
+                or r.get("heating_during_dhw_power_detected")
 
             )
 
@@ -478,9 +478,9 @@ def render_run_inspector(df, runs_list):
 
         if selected_run["run_type"] == "DHW":
 
-            detection_source = selected_run.get("ghost_detection_source", "none")
+            detection_source = selected_run.get("heating_during_dhw_detection_source", "none")
 
-            is_ghost_sensor = (
+            detected_by_zones = (
 
                 selected_run.get("heating_during_dhw_detected")
 
@@ -490,9 +490,9 @@ def render_run_inspector(df, runs_list):
 
             )
 
-            is_ghost_power = (
+            detected_by_power = (
 
-                selected_run.get("ghost_pumping_power_detected")
+                selected_run.get("heating_during_dhw_power_detected")
 
                 if detection_source == "power"
 
@@ -504,7 +504,7 @@ def render_run_inspector(df, runs_list):
 
             if detection_source != "none":
 
-                detected = bool(is_ghost_sensor) or bool(is_ghost_power)
+                detected = bool(detected_by_zones) or bool(detected_by_power)
 
                 if detected:
 
@@ -576,7 +576,7 @@ def render_run_inspector(df, runs_list):
 
             )
 
-            st.plotly_chart(fig_dt, use_container_width=True, key="run_hydro_dt")
+            st.plotly_chart(fig_dt, width="stretch", key="run_hydro_dt")
 
 
 
@@ -630,7 +630,7 @@ def render_run_inspector(df, runs_list):
 
             )
 
-            st.plotly_chart(fig_flow, use_container_width=True, key="run_hydro_flow")
+            st.plotly_chart(fig_flow, width="stretch", key="run_hydro_flow")
 
 
 
@@ -784,7 +784,7 @@ def render_run_inspector(df, runs_list):
 
             )
 
-            st.plotly_chart(fig_zones, use_container_width=True, key="run_hydro_zones")
+            st.plotly_chart(fig_zones, width="stretch", key="run_hydro_zones")
 
 
 
@@ -858,7 +858,7 @@ def render_run_inspector(df, runs_list):
 
             )
 
-            st.plotly_chart(fig_temp, use_container_width=True, key="run_hydro_temps")
+            st.plotly_chart(fig_temp, width="stretch", key="run_hydro_temps")
 
 
 
@@ -1432,9 +1432,9 @@ def render_run_inspector(df, runs_list):
                     if selected_run.get("heating_during_dhw_detected") is not None
                     else None
                 ),
-                "ghost_pumping_power_detected": (
-                    bool(selected_run.get("ghost_pumping_power_detected"))
-                    if selected_run.get("ghost_pumping_power_detected") is not None
+                "heating_during_dhw_power_detected": (
+                    bool(selected_run.get("heating_during_dhw_power_detected"))
+                    if selected_run.get("heating_during_dhw_power_detected") is not None
                     else None
                 ),
                 "heating_during_dhw_pct": selected_run.get(
