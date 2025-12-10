@@ -937,8 +937,10 @@ def render_configuration_interface(uploaded_files):
         else:  # Custom bands
             # Build editable rules table
             rules_default = []
+            valid_from_default = "1970-01-01"
             if isinstance(tariff_structure_cfg, list) and tariff_structure_cfg:
                 first_profile = tariff_structure_cfg[0]
+                valid_from_default = first_profile.get("valid_from", valid_from_default)
                 for r in first_profile.get("rules", []):
                     rules_default.append(
                         {
@@ -992,7 +994,8 @@ def render_configuration_interface(uploaded_files):
 
             tariff_structure_cfg = [
                 {
-                    "valid_from": datetime.now().date().isoformat(),
+                    # Use an early valid_from to ensure applies across historical data
+                    "valid_from": valid_from_default,
                     "name": "Custom",
                     "rules": rules_list,
                 }
