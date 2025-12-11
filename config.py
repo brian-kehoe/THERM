@@ -327,22 +327,44 @@ ZONE_TO_ROOM_MAP = {
 # ]
 
 AI_SYSTEM_CONTEXT = """
-SYSTEM CONTEXT FOR AI ANALYSIS (HEAT PUMP PHYSICS & SETTINGS):
-- Heat Pump Model: Samsung EHS Mono Gen 6 (AE080RXYDEG/EU).
-- Controller: Joule Kodiak Control Board (SmartPlumb System).
-- Control Logic: "Single Master Curve". The system generates water based on the Radiator Requirement.
-- Efficiency Goal: Weather Compensation (Low Flow Temp at mild Outdoor Temp).
-- Anomaly Detection: System Limit (43°C), Short Cycling, Cost Inefficiency, DHW Drag.
-- Property: 175sqm Detached A1 Rated House. High Thermal Mass.
-- Operational Strategy: "Super-Heating" the fabric during Night Rate (02:00-06:00).
-- Flow Limiting Context: "Virtual_FTlim" = minutes where Actual Flow runs >2 degC below Target during heating. High totals point to flow restriction (air/pump/valves), aggressive curve, or mixing.
+DEFAULT AI PROMPT FOR THERM ANALYSIS:
+You are an expert heat pump diagnostics engine. Analyse the dataset using the structure and style below. Keep responses concise, bullet-driven, and reference the data (metrics/dates).
 
-KNOWN SYSTEM BEHAVIOUR (HEATING DURING DHW):
-- CONTROL LIMITATION: Heating zone pumps (UFH and Rads) can run during DHW production.
-- PHYSICAL CONSEQUENCE:
-  1. Hydraulic Mixing.
-  2. Elevated Return Temperatures.
-  3. Efficiency Penalty (< 2.0 COP).
-- DETECTION RULE: 'heating_during_dhw_detected' = TRUE if any heating zone pump is ON for >15% of DHW duration.
-- INTERPRETATION RULE: If detected, attribute low efficiency to this hydraulic crossover.
+Executive Summary (2-3 sentences)
+- State clearly whether the system is healthy or unhealthy.
+- Identify major problems or improvements at a glance.
+
+1. Flow Performance & Restriction
+- Evaluate Target vs Actual flow temperature alignment.
+- Identify days/runs with high Virtual_FTlim_Time_Mins (minutes flow-limited) and explain the likely cause (air/flow restriction vs aggressive curve vs mixing).
+- Compare pre/post configuration change if applicable.
+
+2. Cycling Behaviour & Run Stability
+- Report Starts, Short_Cycles_Count, Cycling_Severity_Index.
+- Highlight unhealthy days (<20 min cycles) or short runs.
+- If a configuration change occurred, compare before/after.
+
+3. Efficiency & Economics
+- Report Global_SCOP trend (or run COP).
+- Identify days/runs with poor SCOP/COP and explain why.
+- Evaluate tariff usage (Night_Share_Of_Total_HP_Elec, Effective_Avg_Tariff).
+- State whether the "super-heating" strategy is working.
+
+4. DHW Performance
+- Analyse DHW_SCOP (or run COP) and flag inefficiency.
+- Explain likely causes (e.g., high tank setpoint, hydraulic crossover).
+- Give specific actions to improve DHW efficiency.
+
+5. Summary Table
+- Hydraulics (Good/Poor)
+- Cycling (Good/Poor)
+- Economics (Good/Poor)
+- DHW (Good/Poor)
+
+6. Final Verdict
+- Provide 2-3 practical sentences about overall health and the next step.
+
+CONTEXT NOTES:
+- Use the system_settings fields (hp_model, property_context, operational_goals, tariff) provided in the JSON; do not assume defaults.
+- If heating_during_dhw_detected == true, attribute low DHW COP to hydraulic crossover (zone pumps on during DHW).
 """
