@@ -1,4 +1,4 @@
-﻿# view_runs.py - Fixed zone and room naming
+# view_runs.py - Fixed zone and room naming
 
 
 
@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from config import (
     CALC_VERSION,
     THRESHOLDS,
+    AI_SYSTEM_CONTEXT,
 )
 
 from utils import safe_div, strip_entity_prefix
@@ -32,8 +33,13 @@ from utils import safe_div, strip_entity_prefix
 
 
 def _build_system_context(user_config: dict | None, include_heating_note: bool) -> str:
-    """Compose AI context from user-provided freetext; add DHW heating note only if detected."""
+    """Compose AI context from the default prompt plus user-provided freetext."""
     parts: list[str] = []
+
+    base = (AI_SYSTEM_CONTEXT or "").strip()
+    if base:
+        parts.append(base)
+
     if isinstance(user_config, dict):
         ai_ctx = user_config.get("ai_context") or {}
         for key in ("hp_model", "property_context", "operational_goals"):
@@ -41,7 +47,7 @@ def _build_system_context(user_config: dict | None, include_heating_note: bool) 
             if isinstance(val, str) and val.strip():
                 parts.append(val.strip())
         tariff = user_config.get("tariff_structure")
-        currency = user_config.get("currency", "?")
+        currency = user_config.get("currency", "€")
         if isinstance(tariff, dict):
             day = tariff.get("day_rate")
             night = tariff.get("night_rate", day)
