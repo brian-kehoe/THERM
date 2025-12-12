@@ -1,7 +1,7 @@
-# T.H.E.R.M.
+**therm**
 ### (Thermal Health & Efficiency Reporting Module)
 
-**T.H.E.R.M.** is a modular, forensic analytics engine designed to audit the performance of Heat Pumps (initially developed for Samsung Gen 6 Heat Pump). 
+**therm** is a modular, forensic analytics engine designed to audit the performance of Heat Pumps (initially developed for Samsung Gen 6 Heat Pump). 
 It transforms raw Grafana/Home Assistant CSV logs into actionable intelligence, highlighting efficiency gaps, hydraulic issues, and data quality problems.
 
 ---
@@ -30,8 +30,8 @@ It transforms raw Grafana/Home Assistant CSV logs into actionable intelligence, 
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/YourUsername/THERM.git](https://github.com/YourUsername/THERM.git)
-    cd THERM
+    git clone [https://github.com/YourUsername/therm.git](https://github.com/YourUsername/therm.git)
+    cd therm
     ```
 
 2.  **Create a virtual environment (Recommended):**
